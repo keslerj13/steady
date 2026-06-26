@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+<meta name="theme-color" content="#0e1116" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>Steady — audiobook + white noise</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1f2630; --line:#2a313c;
+    --text:#e8edf3; --dim:#9aa6b2; --accent:#6ea8fe; --accent2:#3f6fd1;
+    --good:#5cc98c; --warn:#e0b341;
+    --radius:16px;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; height:100%;}
+  body{
+    background:var(--bg); color:var(--text);
+    font:16px/1.4 -apple-system,system-ui,Segoe UI,Roboto,sans-serif;
+    padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    -webkit-user-select:none; user-select:none;
+  }
+  .wrap{max-width:560px; margin:0 auto; padding:16px 16px 120px;}
+  h1{font-size:20px; margin:4px 0 2px; letter-spacing:.2px;}
+  .sub{color:var(--dim); font-size:13px; margin-bottom:16px;}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:16px; margin-bottom:14px;}
+  .card h2{font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:0 0 12px;}
+  .cardhead{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px;}
+  .cardhead h2{margin:0;}
+  .info-btn{flex:0 0 auto; width:22px; height:22px; border-radius:50%; border:1px solid var(--line); background:var(--panel2); color:var(--dim); font:italic 700 12px Georgia,"Times New Roman",serif; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; line-height:1;}
+  .info-btn:active{transform:scale(.92);}
+  .info-btn.on{color:#fff; background:var(--accent2); border-color:var(--accent2);}
+  .info{background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:11px 13px; margin:-2px 0 14px; font-size:12.5px; color:var(--dim); line-height:1.55;}
+  .info b{color:var(--text); font-weight:600;}
+
+  /* Now playing */
+  .np-head{display:flex; align-items:center; gap:14px;}
+  .cover{width:72px; height:72px; flex:0 0 72px; border-radius:12px; object-fit:cover; background:var(--panel2); border:1px solid var(--line);}
+  .np-title{font-size:18px; font-weight:600; margin-bottom:2px; word-break:break-word;}
+  .np-meta{color:var(--dim); font-size:13px;}
+
+  /* Transport */
+  .seek{display:flex; align-items:center; gap:10px; margin:14px 0 6px;}
+  .seek .t{font-variant-numeric:tabular-nums; color:var(--dim); font-size:12px; min-width:38px; text-align:center;}
+  input[type=range]{ -webkit-appearance:none; appearance:none; width:100%; height:30px; background:transparent; }
+  input[type=range]::-webkit-slider-runnable-track{height:6px; border-radius:3px; background:var(--panel2);}
+  input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:18px; height:18px; border-radius:50%; background:var(--accent); margin-top:-6px; box-shadow:0 0 0 4px rgba(110,168,254,.18);}
+  input[type=range]::-moz-range-track{height:6px; border-radius:3px; background:var(--panel2);}
+  input[type=range]::-moz-range-thumb{width:18px; height:18px; border:none; border-radius:50%; background:var(--accent);}
+
+  .controls{display:flex; align-items:center; justify-content:center; gap:10px; margin-top:8px;}
+  .btn{display:flex; align-items:center; justify-content:center; background:var(--panel2); border:1px solid var(--line); color:var(--text); border-radius:50%; width:52px; height:52px; font-size:22px; cursor:pointer; flex:0 0 auto;}
+  .btn:active{transform:scale(.96);}
+  .btn.skip{width:56px; height:56px;}
+  .btn.play{width:72px; height:72px; background:var(--accent); border-color:var(--accent); color:#0b1220; font-size:30px;}
+  .btn svg{width:24px; height:24px; fill:currentColor;}
+  .btn.skip svg{width:30px; height:30px;}
+  .btn.play svg{width:32px; height:32px;}
+
+  /* Sliders rows */
+  .row{display:flex; align-items:center; gap:12px; margin:10px 0;}
+  .row label{flex:0 0 92px; font-size:13px; color:var(--dim);}
+  .row .val{flex:0 0 46px; text-align:right; font-size:12px; color:var(--dim); font-variant-numeric:tabular-nums;}
+  .seg{display:flex; gap:6px;}
+  .ntype{margin:12px 0;}
+  .ntype-lbl{display:block; font-size:13px; color:var(--dim); margin-bottom:8px;}
+  .seg.segwrap{flex-wrap:wrap;}
+  .seg button{flex:1; padding:9px 10px; background:var(--panel2); border:1px solid var(--line); color:var(--dim); border-radius:10px; font-size:13px; cursor:pointer;}
+  .seg button.on{background:var(--accent2); border-color:var(--accent2); color:#fff;}
+  .seg.segwrap button{flex:1 1 auto; min-width:60px;}
+  .seg button.custom{display:inline-flex; align-items:center; gap:7px; max-width:160px;}
+  .seg button.custom .cn{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .seg button.custom .cx{flex:0 0 auto; opacity:.6; font-size:11px;}
+  .seg button.custom .cx:hover{opacity:1;}
+  .seg .segadd{flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; min-width:40px; padding:9px 12px; background:transparent; border:1px dashed var(--line); color:var(--dim); border-radius:10px; font-size:15px; cursor:pointer;}
+
+  /* Playlist */
+  .file-btn{display:inline-flex; align-items:center; gap:8px; background:var(--panel2); border:1px solid var(--line); color:var(--text); padding:11px 14px; border-radius:12px; font-size:14px; cursor:pointer;}
+  .file-btn.primary{background:var(--accent); border-color:var(--accent); color:#0b1220; font-weight:600;}
+  .hint{color:var(--dim); font-size:12px; margin-top:10px;}
+  ul.tracks{list-style:none; margin:12px 0 0; padding:0; max-height:230px; overflow:auto; -webkit-overflow-scrolling:touch;}
+  ul.tracks li{display:flex; align-items:center; gap:10px; padding:10px 8px; border-radius:10px; font-size:14px; color:var(--dim); cursor:pointer;}
+  ul.tracks li .n{flex:0 0 26px; text-align:right; font-variant-numeric:tabular-nums; font-size:12px;}
+  ul.tracks li .name{flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  ul.tracks li.current{background:var(--panel2); color:var(--text);}
+  ul.tracks li.current .name{font-weight:600;}
+
+  /* Book library */
+  ul.books{list-style:none; margin:12px 0 0; padding:0;}
+  ul.books li{display:flex; align-items:center; gap:12px; padding:9px 8px; border-radius:12px; cursor:pointer;}
+  ul.books li.current{background:var(--panel2); outline:1px solid var(--accent2);}
+  ul.books li .bcov{width:52px; height:52px; flex:0 0 52px; border-radius:8px; object-fit:cover; background:var(--panel2); border:1px solid var(--line);}
+  ul.books li .bmain{flex:1; min-width:0;}
+  ul.books li .btitle{font-size:15px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  ul.books li .bprog{font-size:12px; color:var(--dim); margin-top:2px;}
+  ul.books li.current .bprog{color:var(--accent);}
+  ul.books li .bdrag{flex:0 0 auto; color:var(--dim); font-size:20px; padding:8px 2px; cursor:grab; line-height:1; touch-action:none; user-select:none;}
+  ul.books li.dragging{opacity:.55; background:var(--panel2); cursor:grabbing;}
+  ul.books li .bbtns{flex:0 0 auto; display:flex; align-items:center;}
+  ul.books li .bedit,
+  ul.books li .bdel{background:none; border:none; font-size:15px; padding:8px 6px; cursor:pointer; line-height:1;}
+  ul.books li .bedit{color:var(--dim);}
+  ul.books li .bdel{color:#ff8a8a;}
+
+  .pill{display:inline-block; font-size:11px; color:var(--good); border:1px solid rgba(92,201,140,.4); border-radius:999px; padding:2px 8px; margin-left:8px;}
+  .empty{color:var(--dim); font-size:14px; text-align:center; padding:18px 0;}
+  .danger{color:#ff8a8a; background:transparent; border:none; font-size:12px; cursor:pointer; padding:0;}
+  .footnote{color:var(--dim); font-size:11px; text-align:center; margin-top:8px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Steady</h1>
+  <div class="sub">Audiobook + steady background noise. One play button for both — so breaths never glitch the speaker, and pausing lets your headphones sleep.</div>
+
+  <!-- NOW PLAYING -->
+  <div class="card">
+    <div class="cardhead"><h2>Now playing</h2><button class="info-btn" type="button" aria-label="About these controls" aria-expanded="false">i</button></div>
+    <div class="info" hidden>One play button controls the audiobook <b>and</b> the background noise together — pausing stops both, so your headphones can sleep. <b>⟲15 / 15⟳</b> jump fifteen seconds; <b>⏮ ⏭</b> change chapter. Drag the bar to scrub.</div>
+    <div class="np-head">
+      <img id="cover" class="cover" alt="" hidden />
+      <div style="min-width:0">
+        <div class="np-title" id="npTitle">No book loaded</div>
+        <div class="np-meta" id="npMeta">Load your chapter files below to begin</div>
+      </div>
+    </div>
+
+    <div class="seek">
+      <span class="t" id="tCur">0:00</span>
+      <input type="range" id="seek" min="0" max="1000" value="0" step="1" />
+      <span class="t" id="tDur">0:00</span>
+    </div>
+
+    <div class="controls">
+      <button class="btn" id="prevBtn" aria-label="Previous chapter">
+        <svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+      </button>
+      <button class="btn skip" id="back15" aria-label="Back 15 seconds">
+        <svg viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/><text x="12" y="16.5" text-anchor="middle" font-size="8" font-weight="700" fill="currentColor" font-family="-apple-system,system-ui,sans-serif">15</text></svg>
+      </button>
+      <button class="btn play" id="playBtn" aria-label="Play">
+        <svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+      </button>
+      <button class="btn skip" id="fwd15" aria-label="Forward 15 seconds">
+        <svg viewBox="0 0 24 24"><g transform="scale(-1,1) translate(-24,0)"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></g><text x="12" y="16.5" text-anchor="middle" font-size="8" font-weight="700" fill="currentColor" font-family="-apple-system,system-ui,sans-serif">15</text></svg>
+      </button>
+      <button class="btn" id="nextBtn" aria-label="Next chapter">
+        <svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- SOUND -->
+  <div class="card">
+    <div class="cardhead"><h2>Background noise</h2><button class="info-btn" type="button" aria-label="About background noise" aria-expanded="false">i</button></div>
+    <div class="info" hidden>Levels are matched to the audiobook, so 100% noise ≈ book loudness — keep it low, just enough to fill the silences. Brown is the deepest/rumbliest, white the hissiest. Tap <b>＋</b> to add your own looping noise file; it'll be normalized to the same scale.</div>
+    <div class="ntype">
+      <span class="ntype-lbl">Type</span>
+      <div class="seg segwrap" id="noiseType"></div>
+    </div>
+    <input id="noiseFile" type="file" accept="audio/*,.mp3,.m4a,.aac,.ogg,.oga,.wav,.flac,.opus" multiple hidden />
+    <div class="row">
+      <label>Noise level</label>
+      <input type="range" id="noiseVol" min="0" max="100" value="35" />
+      <span class="val" id="noiseVolVal">35%</span>
+    </div>
+  </div>
+
+  <!-- PLAYBACK -->
+  <div class="card">
+    <div class="cardhead"><h2>Audiobook</h2><button class="info-btn" type="button" aria-label="About audiobook settings" aria-expanded="false">i</button></div>
+    <div class="info" hidden>Volume and speed apply to the book only — the background noise has its own level above. Speed ranges from 0.8× to 2×.</div>
+    <div class="row">
+      <label>Book volume</label>
+      <input type="range" id="bookVol" min="0" max="100" value="100" />
+      <span class="val" id="bookVolVal">100%</span>
+    </div>
+    <div class="row">
+      <label>Speed</label>
+      <div class="seg" id="speedSeg" style="flex:1">
+        <button data-sp="0.8">0.8×</button>
+        <button data-sp="1">1×</button>
+        <button data-sp="1.25">1.25×</button>
+        <button data-sp="1.5">1.5×</button>
+        <button data-sp="2">2×</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- LIBRARY -->
+  <div class="card">
+    <div class="cardhead"><h2>My books</h2><button class="info-btn" type="button" aria-label="About the library" aria-expanded="false">i</button></div>
+    <div class="info" hidden>Add a whole book <b>folder</b> (sub-folders and cover art are pulled in automatically) or loose files. Tap a book to open it — each one remembers where you left off. Drag <b>⠿</b> to reorder, <b>✎</b> to rename, <b>✕</b> to remove.</div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <label class="file-btn primary" for="folderPick">📁 Add a book (folder)</label>
+      <input id="folderPick" type="file" webkitdirectory directory multiple hidden />
+      <label class="file-btn" for="filePick">＋ Add files</label>
+      <input id="filePick" type="file" accept="audio/*,.mp3,.m4a,.m4b,.aac,.ogg,.oga,.wav,.flac,.opus" multiple hidden />
+    </div>
+    <ul class="books" id="bookList"><li class="empty">No books yet. Tap “Add a book” and pick a book’s folder. Add as many as you like — each one remembers where you left off.</li></ul>
+  </div>
+
+  <!-- CURRENT BOOK CHAPTERS -->
+  <div class="card" id="chaptersCard" style="display:none">
+    <div class="cardhead"><h2>Chapters <span id="savedPill"></span></h2><button class="info-btn" type="button" aria-label="About chapters" aria-expanded="false">i</button></div>
+    <div class="info" hidden>The files in the current book, in play order. Tap any chapter to jump to it; the book auto-advances from one to the next.</div>
+    <ul class="tracks" id="trackList"></ul>
+    <div class="hint"><button class="danger" id="clearBtn">Remove this book</button></div>
+  </div>
+
+  <div class="footnote">Books stay on this device (saved in your browser). Nothing is uploaded.</div>
+</div>
+
+<audio id="audio" preload="auto"></audio>
+
+<script>
+(() => {
+"use strict";
+
+// ---------- tiny helpers ----------
+const $ = id => document.getElementById(id);
+const fmt = s => {
+  if (!isFinite(s) || s < 0) s = 0;
+  s = Math.floor(s);
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+  return h ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`
+           : `${m}:${String(sec).padStart(2,'0')}`;
+};
+const naturalSort = (a,b) => a.localeCompare(b, undefined, {numeric:true, sensitivity:'base'});
+
+// ---------- settings (localStorage) ----------
+const LS = 'steady.state.v2';
+const defaults = { noiseType:'brown', noiseVol:35, bookVol:100, speed:1, activeId:null };
+let S = Object.assign({}, defaults, JSON.parse(localStorage.getItem(LS) || '{}'));
+let saveTimer = null;
+function persist(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => localStorage.setItem(LS, JSON.stringify(S)), 250);
+}
+
+// ---------- IndexedDB: 'meta' (small per-book info + cover) and 'tracks' (audio blobs) ----------
+// Kept in separate stores so the library list reads only the small records — it
+// never has to load every book's audio just to draw the list.
+const DB_NAME = 'steady-db';
+function idb(){
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB_NAME, 3);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains('meta'))   db.createObjectStore('meta');
+      if (!db.objectStoreNames.contains('tracks')) db.createObjectStore('tracks');
+      if (!db.objectStoreNames.contains('noise'))  db.createObjectStore('noise');
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+const tx = (store, mode) => idb().then(db => db.transaction(store, mode).objectStore(store));
+function idbPut(store, key, val){ return tx(store,'readwrite').then(s => new Promise((res,rej)=>{ const t=s.transaction; s.put(val,key); t.oncomplete=res; t.onerror=()=>rej(t.error); })); }
+function idbGet(store, key){ return tx(store,'readonly').then(s => new Promise((res,rej)=>{ const rq=s.get(key); rq.onsuccess=()=>res(rq.result); rq.onerror=()=>rej(rq.error); })); }
+function idbDel(store, key){ return tx(store,'readwrite').then(s => new Promise((res,rej)=>{ const t=s.transaction; s.delete(key); t.oncomplete=res; t.onerror=()=>rej(t.error); })); }
+function idbAll(store){ return tx(store,'readonly').then(s => new Promise((res,rej)=>{ const rq=s.getAll(); rq.onsuccess=()=>res(rq.result||[]); rq.onerror=()=>rej(rq.error); })); }
+
+// ---------- audio graph ----------
+const audio = $('audio');
+let ctx, mediaSrc, bookGain, noiseGain, noiseSrc, noiseConnected = false;
+let graphBuilt = false;
+
+function buildGraph(){
+  if (graphBuilt) return;
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  mediaSrc = ctx.createMediaElementSource(audio);
+  bookGain = ctx.createGain();
+  noiseGain = ctx.createGain();
+  mediaSrc.connect(bookGain).connect(ctx.destination);
+  noiseGain.connect(ctx.destination);
+  bookGain.gain.value = S.bookVol/100;
+  graphBuilt = true;
+  applyNoiseGain();
+}
+
+// generate a few seconds of looping noise of the requested colour
+function makeNoiseBuffer(type){
+  const seconds = 6, rate = ctx.sampleRate, len = seconds*rate;
+  const buf = ctx.createBuffer(1, len, rate);
+  const d = buf.getChannelData(0);
+  if (type === 'white'){
+    for (let i=0;i<len;i++) d[i] = Math.random()*2-1;
+  } else if (type === 'pink'){
+    let b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0;
+    for (let i=0;i<len;i++){
+      const w = Math.random()*2-1;
+      b0=0.99886*b0+w*0.0555179; b1=0.99332*b1+w*0.0750759;
+      b2=0.96900*b2+w*0.1538520; b3=0.86650*b3+w*0.3104856;
+      b4=0.55000*b4+w*0.5329522; b5=-0.7616*b5-w*0.0168980;
+      d[i]=(b0+b1+b2+b3+b4+b5+b6+w*0.5362)*0.11; b6=w*0.115926;
+    }
+  } else { // brown
+    let last=0;
+    for (let i=0;i<len;i++){
+      const w=Math.random()*2-1;
+      last=(last+0.02*w)/1.02; d[i]=last*3.5;
+    }
+  }
+  // Normalize every colour to the same loudness (unit RMS) so the level slider
+  // behaves consistently no matter which noise is selected, and so the hot/raw
+  // generators (esp. brown) can't blow out or clip.
+  let sumsq = 0;
+  for (let i=0;i<len;i++) sumsq += d[i]*d[i];
+  const norm = 1 / (Math.sqrt(sumsq/len) || 1);
+  for (let i=0;i<len;i++) d[i] *= norm;
+  // gently fade the loop seam so it doesn't click
+  const fade = Math.floor(rate*0.02);
+  for (let i=0;i<fade;i++){ const g=i/fade; d[i]*=g; d[len-1-i]*=g; }
+  return buf;
+}
+
+// The noise buffer above is unit-RMS; this scales it to an actual level. The
+// ceiling is chosen so 100% sits roughly at audiobook loudness (books run ~0.1
+// RMS) rather than blasting full-scale, and each colour gets a small perceptual
+// trim — white hiss reads louder than brown rumble at equal RMS.
+const NOISE_MAX_RMS = 0.12;
+const NOISE_TRIM = { white: 0.7, pink: 0.85, brown: 1.0 };
+// Desired OUTPUT loudness (RMS) for the current selection.
+function noiseTargetRms(){
+  if (S.noiseType === 'off') return 0;
+  return NOISE_MAX_RMS * (S.noiseVol/100) * (NOISE_TRIM[S.noiseType] || 1);
+}
+// The playing source's own RMS (1 for generated buffers, measured for custom files).
+let currentNoiseRms = 1;
+function applyNoiseGain(){
+  if (!graphBuilt) return;
+  noiseGain.gain.value = (S.noiseType === 'off') ? 0 : noiseTargetRms() / (currentNoiseRms || 1);
+}
+
+// Custom noise files: cache of decoded {buffer, rms} by id.
+const customBufCache = new Map();
+async function getCustomBuffer(id){
+  if (customBufCache.has(id)) return customBufCache.get(id);
+  const rec = await idbGet('noise', id);
+  if (!rec) return null;
+  const buffer = await ctx.decodeAudioData(await rec.blob.arrayBuffer());
+  const ch = buffer.getChannelData(0);
+  let s = 0; for (let i=0;i<ch.length;i++) s += ch[i]*ch[i];
+  const out = { buffer, rms: Math.sqrt(s/ch.length) || 1 };
+  customBufCache.set(id, out);
+  return out;
+}
+
+async function startNoise(type){
+  if (!graphBuilt) return;
+  stopNoise();
+  if (type === 'off') return;
+  let buffer, rms;
+  if (type[0] === 'c'){                 // custom 'c:<id>'
+    let c = null;
+    try { c = await getCustomBuffer(type.slice(2)); } catch(e){ c = null; }
+    if (!c){ return; }                  // file missing or undecodable
+    buffer = c.buffer; rms = c.rms;
+  } else {
+    buffer = makeNoiseBuffer(type); rms = 1;   // generated buffers are unit-RMS
+  }
+  if (S.noiseType !== type) return;      // user switched while we were decoding
+  currentNoiseRms = rms;
+  noiseSrc = ctx.createBufferSource();
+  noiseSrc.buffer = buffer;
+  noiseSrc.loop = true;
+  noiseSrc.connect(noiseGain);
+  noiseSrc.start();
+  applyNoiseGain();
+  noiseConnected = true;
+}
+function stopNoise(){
+  if (noiseSrc){ try{ noiseSrc.stop(); }catch(e){} noiseSrc.disconnect(); noiseSrc = null; }
+  noiseConnected = false;
+}
+
+// ---------- library / current book ----------
+let tracks = [];   // active book's tracks: {name, path, blob, url}
+let active = null; // active book meta: {id, title, count, index, time, cover, addedAt}
+function revokeUrls(){ tracks.forEach(t => t.url && URL.revokeObjectURL(t.url)); }
+
+let coverUrl = null;
+function setCover(blob){
+  if (coverUrl){ URL.revokeObjectURL(coverUrl); coverUrl = null; }
+  const img = $('cover');
+  if (blob){
+    coverUrl = URL.createObjectURL(blob);
+    img.src = coverUrl; img.hidden = false;
+  } else {
+    img.removeAttribute('src'); img.hidden = true;
+  }
+  updateSession(isPlaying ? 'playing' : 'paused');   // refresh lock-screen artwork
+}
+
+const AUDIO_RE = /\.(mp3|m4a|m4b|aac|ogg|oga|wav|flac|opus|mp4|webm)$/i;
+const pathOf = f => f.webkitRelativePath || f.relativePath || f.name;
+const isAudio = f => AUDIO_RE.test(f.name) || (f.type && f.type.startsWith('audio/'));
+
+// Compare two paths folder-by-folder (each segment sorted naturally), so e.g.
+// "Disc 2/01.mp3" always sorts after every file in "Disc 1/", and "track2"
+// sorts before "track10". More robust than comparing the whole path string.
+function comparePaths(a, b){
+  const A = a.split('/'), B = b.split('/');
+  const n = Math.min(A.length, B.length);
+  for (let i=0;i<n;i++){
+    const c = naturalSort(A[i], B[i]);
+    if (c) return c;
+  }
+  return A.length - B.length;
+}
+
+const IMAGE_RE = /\.(jpe?g|png|webp|gif|bmp|avif)$/i;
+// Prefer images that look like cover art; among those, the shallowest/topmost path.
+function pickCover(all){
+  const imgs = all.filter(f => IMAGE_RE.test(f.name) || (f.type && f.type.startsWith('image/')));
+  if (!imgs.length) return null;
+  const score = f => /(^|\/|[_\- ])(cover|folder|front|album|art|jacket)/i.test(pathOf(f)) ? 0 : 1;
+  imgs.sort((a,b) => (score(a)-score(b)) || comparePaths(pathOf(a), pathOf(b)));
+  return imgs[0];
+}
+
+const genId = () => 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+function bookTitle(arr){
+  const tops = arr.map(f => { const seg = pathOf(f).split('/'); return seg.length>1 ? seg[0] : null; });
+  if (tops[0] && tops.every(t => t === tops[0])) return tops[0];     // common folder name
+  return arr.length>1 ? 'Untitled book' : arr[0].name.replace(/\.[^.]+$/,'');
+}
+
+// Add a freshly-picked folder/selection as a NEW book and open it.
+async function addBook(files){
+  const all = Array.from(files);
+  let arr = all.filter(isAudio);
+  if (!arr.length){ if (files.length) alert('No audio files found in that selection.'); return; }
+  arr.sort((a,b) => comparePaths(pathOf(a), pathOf(b)));
+  const id = genId();
+  // place new books at the top of the shelf
+  const existing = await idbAll('meta');
+  const minOrder = existing.reduce((mn,m) => Math.min(mn, m.order != null ? m.order : -(m.addedAt||0)), 0);
+  const meta = {
+    id, title: bookTitle(arr), addedAt: Date.now(), order: minOrder - 1,
+    count: arr.length, index: 0, time: 0, cover: pickCover(all) || null
+  };
+  await idbPut('tracks', id, { tracks: arr.map(f => ({ name:f.name, path:pathOf(f), blob:f })) });
+  await idbPut('meta', id, meta);
+  await renderLibrary();
+  await openBook(id);
+}
+
+// Open a saved book: load its files and resume at its saved position (no autoplay).
+async function openBook(id){
+  if (active && active.id === id) { return; }
+  if (isPlaying) await pause();
+  const meta = await idbGet('meta', id);
+  if (!meta) return;
+  const rec = await idbGet('tracks', id);
+  revokeUrls();
+  tracks = (rec && rec.tracks || []).map(t => ({ name:t.name, path:t.path||t.name, blob:t.blob, url:URL.createObjectURL(t.blob) }));
+  active = meta;
+  S.activeId = id; persist();
+  setCover(meta.cover || null);
+  $('chaptersCard').style.display = tracks.length ? '' : 'none';
+  $('savedPill').innerHTML = `<span class="pill">${tracks.length} files</span>`;
+  renderList();
+  cueTrack(Math.min(meta.index||0, tracks.length-1), meta.time||0, false);
+  paintLibraryActive();
+}
+
+// Write the active book's meta (index + time) to disk, throttled. Does NOT read
+// the audio element — callers set active.index/active.time themselves.
+let progTimer = null;
+function persistBook(){
+  if (!active) return;
+  updateLibraryRow(active);
+  clearTimeout(progTimer);
+  progTimer = setTimeout(() => idbPut('meta', active.id, active), 900);
+}
+// Capture the live playback position (called from timeupdate while playing).
+function saveProgress(){
+  if (!active) return;
+  active.time = audio.currentTime || 0;
+  persistBook();
+}
+
+async function deleteBook(id, title){
+  if (!confirm(`Remove “${title}” from this device?`)) return;
+  await idbDel('tracks', id);
+  await idbDel('meta', id);
+  if (active && active.id === id){
+    await pause(); revokeUrls(); tracks = []; active = null; setCover(null);
+    S.activeId = null; persist();
+    $('chaptersCard').style.display = 'none';
+    audio.removeAttribute('src'); updateNowPlaying();
+  }
+  renderLibrary();
+}
+
+// ----- library list rendering -----
+const progressText = m => `Chapter ${(m.index||0)+1} of ${m.count}` + ((m.index||0) || (m.time>5) ? '' : ' · not started');
+let libCoverUrls = [];
+async function renderLibrary(){
+  libCoverUrls.forEach(u => URL.revokeObjectURL(u)); libCoverUrls = [];
+  const metas = await idbAll('meta');
+  const rank = m => (m.order != null ? m.order : -(m.addedAt||0));
+  metas.sort((a,b) => rank(a) - rank(b));
+  const ul = $('bookList');
+  if (!metas.length){
+    ul.innerHTML = '<li class="empty">No books yet. Tap “Add a book” and pick a book’s folder. Add as many as you like — each one remembers where you left off.</li>';
+    return;
+  }
+  ul.innerHTML = '';
+  for (const m of metas){
+    const li = document.createElement('li');
+    li.dataset.id = m.id;
+    if (active && m.id === active.id) li.classList.add('current');
+    let coverHtml = '<div class="bcov"></div>';
+    if (m.cover){ const u = URL.createObjectURL(m.cover); libCoverUrls.push(u); coverHtml = `<img class="bcov" src="${u}" alt="">`; }
+    li.innerHTML = `<span class="bdrag" aria-label="Drag to reorder" title="Drag to reorder">⠿</span>`
+      + coverHtml
+      + `<div class="bmain"><div class="btitle"></div><div class="bprog"></div></div>`
+      + `<div class="bbtns"><button class="bedit" aria-label="Rename">✎</button><button class="bdel" aria-label="Remove">✕</button></div>`;
+    li.querySelector('.btitle').textContent = m.title;
+    li.querySelector('.bprog').textContent = progressText(m);
+    li.querySelector('.bmain').onclick = () => openBook(m.id);
+    li.querySelector('.bcov').onclick = () => openBook(m.id);
+    li.querySelector('.bedit').onclick = e => { e.stopPropagation(); renameBook(m.id, m.title); };
+    li.querySelector('.bdel').onclick = e => { e.stopPropagation(); deleteBook(m.id, m.title); };
+    li.querySelector('.bdrag').addEventListener('pointerdown', e => startDrag(e, li));
+    ul.appendChild(li);
+  }
+}
+
+async function renameBook(id, cur){
+  const name = prompt('Rename book:', cur);
+  if (name == null) return;
+  const t = name.trim();
+  if (!t) return;
+  const meta = await idbGet('meta', id);
+  if (!meta) return;
+  meta.title = t;
+  await idbPut('meta', id, meta);
+  if (active && active.id === id){ active.title = t; updateSession(isPlaying ? 'playing' : 'paused'); }
+  renderLibrary();
+}
+
+// ----- drag to reorder (pointer-based, works for touch + mouse) -----
+function startDrag(e, li){
+  e.preventDefault(); e.stopPropagation();
+  const ul = $('bookList');
+  li.classList.add('dragging');
+  const move = ev => {
+    const y = ev.clientY;
+    const after = [...ul.children].find(c => c !== li && y < c.getBoundingClientRect().top + c.offsetHeight/2);
+    if (after) ul.insertBefore(li, after); else ul.appendChild(li);
+  };
+  const up = async () => {
+    li.classList.remove('dragging');
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    await commitOrder();
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+}
+// Write the on-screen order back to each book's meta record.
+async function commitOrder(){
+  const ids = [...$('bookList').querySelectorAll('li')].map(li => li.dataset.id).filter(Boolean);
+  for (let i=0;i<ids.length;i++){
+    const m = await idbGet('meta', ids[i]);
+    if (m && m.order !== i){ m.order = i; await idbPut('meta', m.id, m); }
+  }
+}
+function paintLibraryActive(){
+  document.querySelectorAll('#bookList li').forEach(li =>
+    li.classList.toggle('current', !!active && li.dataset.id === active.id));
+}
+function updateLibraryRow(m){
+  const li = document.querySelector(`#bookList li[data-id="${m.id}"]`);
+  if (li){ const p = li.querySelector('.bprog'); if (p) p.textContent = progressText(m); }
+}
+
+// drop the common top-level book folder; show the rest of the path so order is clear
+let commonPrefix = '';
+function computeCommonPrefix(){
+  const paths = tracks.map(t => (t.path||t.name).split('/').slice(0,-1));
+  if (!paths.length){ commonPrefix=''; return; }
+  let pre = paths[0];
+  for (const p of paths){
+    let k=0; while(k<pre.length && k<p.length && pre[k]===p[k]) k++;
+    pre = pre.slice(0,k);
+  }
+  commonPrefix = pre.length ? pre.join('/')+'/' : '';
+}
+function trackLabel(t){
+  let p = (t.path||t.name);
+  if (commonPrefix && p.startsWith(commonPrefix)) p = p.slice(commonPrefix.length);
+  return p.replace(/\.[^.]+$/, '');           // strip extension
+}
+
+function renderList(){
+  const ul = $('trackList');
+  if (!tracks.length){ ul.innerHTML = '<li class="empty">No chapters yet.</li>'; return; }
+  computeCommonPrefix();
+  const cur = active ? active.index : -1;
+  ul.innerHTML = '';
+  tracks.forEach((t, i) => {
+    const li = document.createElement('li');
+    if (i === cur) li.className = 'current';
+    li.innerHTML = `<span class="n">${i+1}</span><span class="name"></span>`;
+    li.querySelector('.name').textContent = trackLabel(t);
+    li.onclick = () => { cueTrack(i, 0, isPlaying); };
+    ul.appendChild(li);
+  });
+}
+
+// ---------- core playback ----------
+let isPlaying = false;
+
+function cueTrack(i, time, autoplay){
+  if (!tracks.length || !active) return;
+  i = Math.max(0, Math.min(i, tracks.length-1));
+  active.index = i; active.time = time||0; persistBook();
+  audio.src = tracks[i].url;
+  audio.load();
+  const apply = () => {
+    audio.currentTime = active.time || 0;
+    audio.playbackRate = S.speed;
+    updateNowPlaying();
+    if (autoplay) play();
+  };
+  audio.addEventListener('loadedmetadata', apply, { once:true });
+  renderList();
+  updateNowPlaying();
+}
+
+async function play(){
+  if (!tracks.length) return;
+  buildGraph();
+  if (ctx.state !== 'running') await ctx.resume();
+  if (!noiseConnected && S.noiseType !== 'off') startNoise(S.noiseType);
+  try { await audio.play(); } catch(e){ /* autoplay blocked until gesture */ }
+}
+
+async function pause(){
+  audio.pause();
+  // Suspend the whole context so the background noise stops too and the
+  // headphones/speaker are allowed to go to sleep (saves battery).
+  if (ctx && ctx.state === 'running') await ctx.suspend();
+}
+
+function togglePlay(){ isPlaying ? pause() : play(); }
+
+function nextTrack(auto){
+  if (!active) return;
+  if (active.index < tracks.length-1) cueTrack(active.index+1, 0, true);
+  else { pause(); audio.currentTime = audio.duration||0; } // end of book
+}
+function prevTrack(){
+  if (!active) return;
+  if (audio.currentTime > 3 || active.index === 0) { audio.currentTime = 0; }
+  else cueTrack(active.index-1, 0, isPlaying);
+}
+
+// ---------- audio element events ----------
+audio.addEventListener('play', () => { isPlaying = true; setPlayIcon(true); updateSession('playing'); });
+audio.addEventListener('pause', () => { isPlaying = false; setPlayIcon(false); updateSession('paused'); });
+audio.addEventListener('ended', () => nextTrack(true));
+audio.addEventListener('timeupdate', () => {
+  if (!seeking){
+    const d = audio.duration||0;
+    $('seek').value = d ? (audio.currentTime/d*1000) : 0;
+    $('tCur').textContent = fmt(audio.currentTime);
+  }
+  // remember where we are in this book (throttled write inside saveProgress)
+  if (!audio.paused) saveProgress();
+  updateSessionPosition();
+});
+audio.addEventListener('durationchange', () => { $('tDur').textContent = fmt(audio.duration); });
+
+function updateNowPlaying(){
+  const t = active ? tracks[active.index] : null;
+  $('npTitle').textContent = t ? trackLabel(t) : 'No book loaded';
+  $('npMeta').textContent = t ? `Track ${active.index+1} of ${tracks.length}` : 'Load a book below to begin';
+  updateSession('paused');
+}
+
+// ---------- UI: transport ----------
+function setPlayIcon(playing){
+  $('playIcon').innerHTML = playing
+    ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>'   // pause
+    : '<path d="M8 5v14l11-7z"/>';                // play
+  $('playBtn').setAttribute('aria-label', playing ? 'Pause' : 'Play');
+}
+// jump within the current chapter (clamped to its bounds)
+function skip(sec){
+  if (!active || !tracks.length) return;
+  const d = audio.duration || 0;
+  let t = (audio.currentTime || 0) + sec;
+  t = Math.max(0, d ? Math.min(t, d) : Math.max(0, t));
+  audio.currentTime = t;
+  saveProgress();
+}
+$('playBtn').onclick = togglePlay;
+$('nextBtn').onclick = () => nextTrack(false);
+$('prevBtn').onclick = prevTrack;
+$('back15').onclick = () => skip(-15);
+$('fwd15').onclick = () => skip(15);
+
+let seeking = false;
+const seek = $('seek');
+seek.addEventListener('input', () => {
+  seeking = true;
+  const d = audio.duration||0;
+  $('tCur').textContent = fmt(d * seek.value/1000);
+});
+seek.addEventListener('change', () => {
+  const d = audio.duration||0;
+  audio.currentTime = d * seek.value/1000;
+  seeking = false;
+});
+
+// ---------- UI: add books ----------
+// reset .value so re-picking the same folder still fires 'change'
+$('filePick').addEventListener('change', e => { addBook(e.target.files); e.target.value=''; });
+$('folderPick').addEventListener('change', e => { addBook(e.target.files); e.target.value=''; });
+$('clearBtn').onclick = () => { if (active) deleteBook(active.id, active.title); };
+
+// ---------- UI: noise types (built-in + custom files) ----------
+let customNoises = [];   // [{id, name}]
+async function loadNoiseList(){
+  const recs = await idbAll('noise');
+  recs.sort((a,b) => (a.addedAt||0) - (b.addedAt||0));
+  customNoises = recs.map(r => ({ id:r.id, name:r.name }));
+  // if the saved selection points at a custom noise that no longer exists, fall back
+  if (S.noiseType && S.noiseType[0]==='c' && !customNoises.some(n => 'c:'+n.id === S.noiseType)){
+    S.noiseType = 'brown'; persist();
+  }
+  renderNoiseTypes();
+}
+function renderNoiseTypes(){
+  const seg = $('noiseType'); seg.innerHTML = '';
+  const mk = (type,label) => { const b=document.createElement('button'); b.textContent=label; if(type===S.noiseType) b.classList.add('on'); b.onclick=()=>selectNoise(type); return b; };
+  seg.appendChild(mk('brown','Brown'));
+  seg.appendChild(mk('pink','Pink'));
+  seg.appendChild(mk('white','White'));
+  for (const n of customNoises){
+    const type = 'c:'+n.id;
+    const b = document.createElement('button');
+    b.className = 'custom' + (type===S.noiseType ? ' on' : '');
+    b.innerHTML = '<span class="cn"></span><span class="cx" aria-label="Remove">✕</span>';
+    b.querySelector('.cn').textContent = n.name;
+    b.onclick = () => selectNoise(type);
+    b.querySelector('.cx').onclick = e => { e.stopPropagation(); deleteNoise(n.id, n.name); };
+    seg.appendChild(b);
+  }
+  seg.appendChild(mk('off','Off'));
+  const add = document.createElement('label');
+  add.className = 'segadd'; add.setAttribute('for','noiseFile'); add.textContent = '＋';
+  add.title = 'Add your own noise file';
+  seg.appendChild(add);
+}
+function selectNoise(type){
+  S.noiseType = type; persist(); renderNoiseTypes();
+  if (!graphBuilt) return;
+  if (type === 'off'){ stopNoise(); applyNoiseGain(); }
+  else if (isPlaying || (ctx && ctx.state==='running')) startNoise(type);
+  else stopNoise();   // will start fresh on next play
+}
+async function addNoise(files){
+  const arr = Array.from(files).filter(isAudio);
+  if (!arr.length){ if (files.length) alert('Please choose an audio file.'); return; }
+  let firstId = null;
+  for (const f of arr){
+    const id = genId();
+    await idbPut('noise', id, { id, name: f.name.replace(/\.[^.]+$/,''), blob: f, addedAt: Date.now() });
+    if (!firstId) firstId = id;
+  }
+  await loadNoiseList();
+  if (firstId) selectNoise('c:'+firstId);   // switch to the newly added noise
+}
+async function deleteNoise(id, name){
+  if (!confirm(`Remove noise “${name}”?`)) return;
+  await idbDel('noise', id);
+  customBufCache.delete(id);
+  if (S.noiseType === 'c:'+id){ S.noiseType = 'brown'; persist(); }
+  await loadNoiseList();
+  if (graphBuilt && S.noiseType !== 'off' && (isPlaying || (ctx && ctx.state==='running'))) startNoise(S.noiseType);
+}
+$('noiseFile').addEventListener('change', e => { addNoise(e.target.files); e.target.value=''; });
+
+const noiseVol = $('noiseVol');
+noiseVol.addEventListener('input', () => {
+  S.noiseVol = +noiseVol.value; persist();
+  $('noiseVolVal').textContent = S.noiseVol + '%';
+  applyNoiseGain();
+});
+
+// ---------- UI: book volume + speed ----------
+const bookVol = $('bookVol');
+bookVol.addEventListener('input', () => {
+  S.bookVol = +bookVol.value; persist();
+  $('bookVolVal').textContent = S.bookVol + '%';
+  if (graphBuilt) bookGain.gain.value = S.bookVol/100;
+});
+function paintSpeed(){
+  document.querySelectorAll('#speedSeg button').forEach(b =>
+    b.classList.toggle('on', +b.dataset.sp === S.speed));
+}
+document.querySelectorAll('#speedSeg button').forEach(b => {
+  b.onclick = () => { S.speed = +b.dataset.sp; persist(); audio.playbackRate = S.speed; paintSpeed(); };
+});
+
+// ---------- Media Session (lock-screen controls) ----------
+function updateSession(state){
+  if (!('mediaSession' in navigator)) return;
+  const t = active ? tracks[active.index] : null;
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: t ? trackLabel(t) : 'Steady',
+    artist: active ? active.title : 'Steady audiobook',
+    album: t ? `Track ${active.index+1} of ${tracks.length}` : '',
+    artwork: coverUrl ? [{ src: coverUrl, sizes:'512x512', type:'image/jpeg' }] : []
+  });
+  navigator.mediaSession.playbackState = state;
+}
+function updateSessionPosition(){
+  if (!('mediaSession' in navigator) || !('setPositionState' in navigator.mediaSession)) return;
+  if (audio.duration && isFinite(audio.duration)){
+    try { navigator.mediaSession.setPositionState({
+      duration: audio.duration, playbackRate: audio.playbackRate||1, position: audio.currentTime
+    }); } catch(e){}
+  }
+}
+if ('mediaSession' in navigator){
+  navigator.mediaSession.setActionHandler('play', play);
+  navigator.mediaSession.setActionHandler('pause', pause);
+  navigator.mediaSession.setActionHandler('previoustrack', prevTrack);
+  navigator.mediaSession.setActionHandler('nexttrack', () => nextTrack(false));
+  navigator.mediaSession.setActionHandler('seekto', d => { if (d.seekTime!=null) audio.currentTime = d.seekTime; });
+  try { navigator.mediaSession.setActionHandler('seekbackward', () => skip(-15)); } catch(e){}
+  try { navigator.mediaSession.setActionHandler('seekforward', () => skip(15)); } catch(e){}
+}
+
+// ---------- init ----------
+// ---------- UI: info (i) toggles ----------
+document.querySelectorAll('.info-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const panel = btn.closest('.cardhead').nextElementSibling;   // the .info panel
+    if (!panel || !panel.classList.contains('info')) return;
+    const opening = panel.hasAttribute('hidden');
+    panel.toggleAttribute('hidden', !opening);
+    btn.classList.toggle('on', opening);
+    btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+  });
+});
+
+function initUI(){
+  noiseVol.value = S.noiseVol; $('noiseVolVal').textContent = S.noiseVol+'%';
+  bookVol.value = S.bookVol; $('bookVolVal').textContent = S.bookVol+'%';
+  renderNoiseTypes(); paintSpeed(); setPlayIcon(false);
+}
+initUI();
+(async () => {
+  await loadNoiseList();
+  await renderLibrary();
+  if (S.activeId) await openBook(S.activeId);
+})();
+
+// flush the active book's position when leaving
+window.addEventListener('pagehide', () => {
+  if (active){ active.time = audio.currentTime; idbPut('meta', active.id, active); }
+});
+})();
+</script>
+</body>
+</html>
