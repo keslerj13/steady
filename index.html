@@ -6,6 +6,10 @@
 <meta name="theme-color" content="#0e1116" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<link rel="icon" type="image/png" href="icon-192.png" />
 <title>Steady — audiobook + white noise</title>
 <style>
   :root{
@@ -871,6 +875,13 @@ initUI();
 window.addEventListener('pagehide', () => {
   if (active){ active.time = audio.currentTime; idbPut('meta', active.id, active); }
 });
+
+// register the service worker so the app loads offline (no-op when unsupported / file://)
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
 })();
 </script>
 </body>
