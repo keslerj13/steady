@@ -33,18 +33,35 @@ continuous background noise on the *same* play/pause button.
 - Everything (books, covers, your place in each) is stored on-device in the browser.
 - Each section has an **(i)** button in its top-right corner that reveals short
   instructions for that section.
+- **Installable PWA + offline:** add it to the home screen and it launches fullscreen
+  like a real app, with its own icon, and works with no connection.
+
+## Files to host
+Upload these to the host (the whole set):
+- `index.html` — the app
+- `manifest.webmanifest` — makes it installable
+- `sw.js` — service worker for offline support
+- `icon-192.png`, `icon-512.png`, `icon-maskable-512.png` — app icons
+
+Not needed for hosting: `steady_logo.png` (the source artwork the icons are made from)
+and `.claude/launch.json` (local dev-server config).
 
 ## How to run it (Android, recommended)
-The most reliable setup is to host the single `index.html` so it can be installed:
-
-1. Put `index.html` on any static host (e.g. GitHub Pages, Netlify drop, Vercel).
-2. On her phone, open that URL in **Chrome**.
-3. Chrome menu → **Add to Home screen**. Now it opens like an app.
+1. Put the files above on any static host (e.g. GitHub Pages — see below).
+2. On her phone, open the URL in **Chrome**.
+3. Chrome menu → **Install app** / **Add to Home screen**. It opens fullscreen like an app.
 4. Tap **Add a book (folder)**, pick a book's folder, and hit play. Repeat for each
    book — they all live in the library and keep their own place.
 
-You can also just open `index.html` directly in a browser to try it — but hosting it
-gives the most reliable background playback and saved-book storage.
+## Hosting on GitHub Pages
+1. Create a public repo (e.g. `steady`) at github.com/new.
+2. **Add file → Upload files** and drag in all the files listed above; commit.
+3. **Settings → Pages → Source: Deploy from a branch → `main` / `/ (root)`**, Save.
+4. After ~1–2 min the site is live at `https://YOUR-USERNAME.github.io/steady/`.
+
+The app icons are derived from `steady_logo.png` (resized with macOS `sips`). To change
+the icon, replace that file and regenerate `icon-192.png`, `icon-512.png`, and
+`icon-maskable-512.png`.
 
 ## Local test
 From this folder: `python3 -m http.server 8123` then open `http://localhost:8123`.
