@@ -269,18 +269,18 @@ function idbAll(store){ return tx(store,'readonly').then(s => new Promise((res,r
 
 // ---------- audio graph ----------
 const audio = $('audio');
-let ctx, mediaSrc, bookGain, noiseGain, noiseSrc, noiseConnected = false;
+let ctx, noiseGain, noiseSrc, noiseConnected = false;
 let graphBuilt = false;
 
+// Only the generated noise goes through Web Audio. The book plays straight from the
+// <audio> element (volume via audio.volume) — routing it through Web Audio breaks
+// playbackRate on iOS Safari. The single play/pause still drives both: play resumes
+// the context + starts the element; pause suspends the context + pauses the element.
 function buildGraph(){
   if (graphBuilt) return;
   ctx = new (window.AudioContext || window.webkitAudioContext)();
-  mediaSrc = ctx.createMediaElementSource(audio);
-  bookGain = ctx.createGain();
   noiseGain = ctx.createGain();
-  mediaSrc.connect(bookGain).connect(ctx.destination);
   noiseGain.connect(ctx.destination);
-  bookGain.gain.value = S.bookVol/100;
   graphBuilt = true;
   applyNoiseGain();
 }
@@ -806,7 +806,7 @@ const bookVol = $('bookVol');
 bookVol.addEventListener('input', () => {
   S.bookVol = +bookVol.value; persist();
   $('bookVolVal').textContent = S.bookVol + '%';
-  if (graphBuilt) bookGain.gain.value = S.bookVol/100;
+  audio.volume = S.bookVol/100;
 });
 function paintSpeed(){
   document.querySelectorAll('#speedSeg button').forEach(b =>
@@ -862,6 +862,8 @@ document.querySelectorAll('.info-btn').forEach(btn => {
 function initUI(){
   noiseVol.value = S.noiseVol; $('noiseVolVal').textContent = S.noiseVol+'%';
   bookVol.value = S.bookVol; $('bookVolVal').textContent = S.bookVol+'%';
+  audio.volume = S.bookVol/100;
+  audio.preservesPitch = true;   // keep voices natural when sped up
   renderNoiseTypes(); paintSpeed(); setPlayIcon(false);
 }
 initUI();
