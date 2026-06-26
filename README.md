@@ -19,15 +19,20 @@ continuous background noise on the *same* play/pause button.
 - **Reorder** the shelf by dragging the ⠿ handle on the left of each book.
 - Add a book by picking its **folder** (including folders-of-folders / multi-disc) —
   every audio file inside is pulled out and ordered by its path automatically.
-- Cover art: if the folder contains an image, it's shown in Now Playing, the library
-  list, and the lock screen.
-- Auto-advances chapter to chapter, with ⟲15 / 15⟳ buttons to jump back/forward 15
-  seconds (also mapped to the lock-screen seek controls).
+- **Cover art**, shown as a large banner in Now Playing (and in the library list +
+  lock screen). The default comes from an image in the folder, but tap **Change cover**
+  to pick a different one from the folder's images or upload your own.
+- **Whole-book progress bar** above the chapter scrub — a visual-only bar showing how
+  many minutes into the entire book you are, out of the total.
+- Auto-advances chapter to chapter, with **« 60 / « 15** and **15 » / 60 »** buttons to
+  jump back/forward 15 or 60 seconds (15s is also mapped to the lock-screen seek).
+- **Smart resume:** if it's been more than 5 seconds since you last listened, pressing
+  play rewinds 15 seconds so you catch the lead-up to where you stopped.
 - Background noise: brown / pink / white, **plus your own noise files** (tap ＋ on the
   Type row to import rain, fan, ocean, etc.). Every option — built-in or custom — is
   loudness-normalized to the same scale, so the level slider behaves identically and a
   loud file won't blast. Custom noises are saved on-device and removable with their ✕.
-- Book volume + playback speed (0.8×–2×).
+- Book volume + a **0.5×–3× speed slider** that snaps to set steps.
 - Lock-screen / notification controls (play, pause, next, previous), so it keeps
   playing with the screen off.
 - Everything (books, covers, your place in each) is stored on-device in the browser.
