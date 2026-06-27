@@ -82,11 +82,17 @@
   .controls{display:flex; align-items:center; justify-content:center; gap:10px; margin-top:8px;}
   .btn{display:flex; align-items:center; justify-content:center; background:var(--panel2); border:1px solid var(--line); color:var(--text); border-radius:50%; width:52px; height:52px; font-size:22px; cursor:pointer; flex:0 0 auto;}
   .btn:active{transform:scale(.96);}
-  .btn.skip{width:56px; height:56px;}
-  .btn.play{width:72px; height:72px; background:var(--accent); border-color:var(--accent); color:#0b1220; font-size:30px;}
+  .btn.play{width:92px; height:92px; background:var(--accent); border-color:var(--accent); color:#0b1220; font-size:30px;}
   .btn svg{width:24px; height:24px; fill:currentColor;}
-  .btn.skip svg{width:30px; height:30px;}
-  .btn.play svg{width:32px; height:32px;}
+  .btn.play svg{width:40px; height:40px;}
+  /* play on its own, then jumps, then chapter nav — generous spacing between groups */
+  .controls-play{margin-top:6px;}
+  .controls-jump{margin-top:26px; gap:0; justify-content:space-evenly;}
+  .controls-ch{margin-top:26px; gap:10px;}
+  .jbtn{display:flex; flex-direction:column; align-items:center; gap:6px; background:none; border:none; padding:4px 4px; cursor:pointer; color:var(--dim);}
+  .jbtn svg{width:64px; height:56px; fill:#b3bcc7;}
+  .jbtn span{font-size:13px; color:var(--dim); font-variant-numeric:tabular-nums;}
+  .jbtn:active{transform:scale(.9);}
 
   /* Sliders rows */
   .row{display:flex; align-items:center; gap:12px; margin:10px 0;}
@@ -152,7 +158,7 @@
   <!-- NOW PLAYING -->
   <div class="card">
     <div class="cardhead"><h2>Now playing</h2><button class="info-btn" type="button" aria-label="About these controls" aria-expanded="false">i</button></div>
-    <div class="info" hidden>One play button controls the audiobook <b>and</b> the background noise together — pausing stops both, so your headphones can sleep. The top bar shows your place in the whole book; the lower bar scrubs the current chapter. <b>« 60 / « 15</b> and <b>15 » / 60 »</b> jump back/forward; <b>‹ ›</b> change chapter. Tap the cover to change the picture.</div>
+    <div class="info" hidden>The big button plays/pauses the audiobook <b>and</b> the background noise together — pausing stops both, so your headphones can sleep. The triangles jump back/forward (single = 15s, double = 60s). The chapter buttons change chapter — and for 30 seconds after, tapping the <b>opposite</b> one undoes an accidental change and puts you back where you were. The top bar shows your place in the whole book; the lower bar scrubs the current chapter. Tap the cover to change the picture.</div>
 
     <div class="np-cover-wrap">
       <img id="cover" class="cover" alt="" hidden />
@@ -185,23 +191,34 @@
       <span class="t" id="tDur">0:00</span>
     </div>
 
-    <div class="controls">
-      <button class="btn skip" id="back60" aria-label="Back 60 seconds">
-        <svg viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/><text x="12" y="16.5" text-anchor="middle" font-size="7.5" font-weight="700" fill="currentColor" font-family="-apple-system,system-ui,sans-serif">60</text></svg>
-      </button>
-      <button class="btn skip" id="back15" aria-label="Back 15 seconds">
-        <svg viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/><text x="12" y="16.5" text-anchor="middle" font-size="8" font-weight="700" fill="currentColor" font-family="-apple-system,system-ui,sans-serif">15</text></svg>
-      </button>
+    <!-- play/pause on its own, big -->
+    <div class="controls controls-play">
       <button class="btn play" id="playBtn" aria-label="Play">
         <svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
       </button>
-      <button class="btn skip" id="fwd15" aria-label="Forward 15 seconds">
-        <svg viewBox="0 0 24 24"><g transform="scale(-1,1) translate(-24,0)"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></g><text x="12" y="16.5" text-anchor="middle" font-size="8" font-weight="700" fill="currentColor" font-family="-apple-system,system-ui,sans-serif">15</text></svg>
+    </div>
+
+    <!-- jump buttons: triangles (single = 15s, double = 60s) -->
+    <div class="controls controls-jump">
+      <button class="jbtn" id="back60" type="button" aria-label="Back 60 seconds">
+        <svg viewBox="0 0 24 24"><polygon points="21,5 21,19 13,12"/><polygon points="12,5 12,19 4,12"/></svg>
+        <span>60s</span>
       </button>
-      <button class="btn skip" id="fwd60" aria-label="Forward 60 seconds">
-        <svg viewBox="0 0 24 24"><g transform="scale(-1,1) translate(-24,0)"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></g><text x="12" y="16.5" text-anchor="middle" font-size="7.5" font-weight="700" fill="currentColor" font-family="-apple-system,system-ui,sans-serif">60</text></svg>
+      <button class="jbtn" id="back15" type="button" aria-label="Back 15 seconds">
+        <svg viewBox="0 0 24 24"><polygon points="17,4 17,20 5,12"/></svg>
+        <span>15s</span>
+      </button>
+      <button class="jbtn" id="fwd15" type="button" aria-label="Forward 15 seconds">
+        <svg viewBox="0 0 24 24"><polygon points="7,4 7,20 19,12"/></svg>
+        <span>15s</span>
+      </button>
+      <button class="jbtn" id="fwd60" type="button" aria-label="Forward 60 seconds">
+        <svg viewBox="0 0 24 24"><polygon points="3,5 3,19 11,12"/><polygon points="12,5 12,19 20,12"/></svg>
+        <span>60s</span>
       </button>
     </div>
+
+    <!-- chapter navigation -->
     <div class="controls controls-ch">
       <button class="chbtn" id="prevBtn" type="button"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg> Prev chapter</button>
       <button class="chbtn" id="nextBtn" type="button">Next chapter <svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg></button>
@@ -243,7 +260,7 @@
 
   <!-- LIBRARY -->
   <div class="card">
-    <div class="cardhead"><h2>My books</h2><button class="info-btn" type="button" aria-label="About the library" aria-expanded="false">i</button></div>
+    <div class="cardhead"><h2>Bookshelf</h2><button class="info-btn" type="button" aria-label="About the library" aria-expanded="false">i</button></div>
     <div class="info" hidden>Add a whole book <b>folder</b> (sub-folders and cover art are pulled in automatically) or loose files. Tap a book to open it — each one remembers where you left off. Drag <b>⠿</b> to reorder, <b>✎</b> to rename, <b>✕</b> to remove. <b>Export backup</b> saves everything (books + your place) to a file you can move to another device and <b>Import</b> there.</div>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       <label class="file-btn primary" for="folderPick">📁 Add a book (folder)</label>
@@ -511,7 +528,9 @@ async function addBook(files){
   await idbPut('covers', id, all.filter(isImage));   // all candidate images, for the cover picker
   await idbPut('meta', id, meta);
   await renderLibrary();
-  await openBook(id);
+  // Only jump the player to the new book if nothing is loaded yet. If she's already
+  // listening to a book, leave it playing — the new book just appears in the library.
+  if (!active) await openBook(id);
 }
 
 // Open a saved book: load its files and resume at its saved position (no autoplay).
@@ -831,9 +850,29 @@ function skip(sec){
   audio.currentTime = t;
   saveProgress();
 }
+// Chapter nav with a 30s undo: after a chapter change, tapping the OPPOSITE button
+// within 30s puts her back exactly where she was (in case she bumped it by accident).
+let navUndo = null;   // { dir:'next'|'prev', index, time, at }
+const NAV_UNDO_MS = 30000;
+function navNext(){
+  if (!active) return;
+  if (navUndo && navUndo.dir === 'prev' && Date.now() - navUndo.at < NAV_UNDO_MS){
+    const u = navUndo; navUndo = null; cueTrack(u.index, u.time, isPlaying); return;
+  }
+  navUndo = { dir:'next', index:active.index, time:audio.currentTime||0, at:Date.now() };
+  nextTrack(false);
+}
+function navPrev(){
+  if (!active) return;
+  if (navUndo && navUndo.dir === 'next' && Date.now() - navUndo.at < NAV_UNDO_MS){
+    const u = navUndo; navUndo = null; cueTrack(u.index, u.time, isPlaying); return;
+  }
+  navUndo = { dir:'prev', index:active.index, time:audio.currentTime||0, at:Date.now() };
+  prevTrack();
+}
 $('playBtn').onclick = togglePlay;
-$('nextBtn').onclick = () => nextTrack(false);
-$('prevBtn').onclick = prevTrack;
+$('nextBtn').onclick = navNext;
+$('prevBtn').onclick = navPrev;
 $('back15').onclick = () => skip(-15);
 $('fwd15').onclick = () => skip(15);
 $('back60').onclick = () => skip(-60);
