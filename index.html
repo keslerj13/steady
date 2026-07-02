@@ -707,20 +707,24 @@ function renderList(){
 let isPlaying = false;
 let lastListenAt = 0;            // ms timestamp of last active playback (for smart resume)
 let bookOffsets = [], bookTotal = 0;
+let cueing = false;             // true while we're swapping tracks (noise should keep covering the gap)
 
 function cueTrack(i, time, autoplay){
   if (!tracks.length || !active) return;
   i = Math.max(0, Math.min(i, tracks.length-1));
   active.index = i; active.time = time||0; persistBook();
+  cueing = true;               // the <audio> 'pause' from this src swap must NOT stop the noise
   audio.src = tracks[i].url;
   audio.load();
   const apply = () => {
     audio.currentTime = active.time || 0;
     audio.playbackRate = S.speed;
+    cueing = false;
     updateNowPlaying();
     if (autoplay) play();
   };
   audio.addEventListener('loadedmetadata', apply, { once:true });
+  setTimeout(() => { cueing = false; }, 5000);   // safety, in case metadata never loads
   renderList();
   updateNowPlaying();
 }
@@ -759,8 +763,18 @@ function prevTrack(){
 }
 
 // ---------- audio element events ----------
-audio.addEventListener('play', () => { isPlaying = true; setPlayIcon(true); updateSession('playing'); });
-audio.addEventListener('pause', () => { isPlaying = false; setPlayIcon(false); updateSession('paused'); });
+audio.addEventListener('play', () => {
+  isPlaying = true; setPlayIcon(true); updateSession('playing');
+  // keep the background noise following the book — including if playback auto-resumed
+  if (ctx && ctx.state === 'suspended') ctx.resume();
+  if (graphBuilt && !noiseConnected && S.noiseType !== 'off') startNoise(S.noiseType);
+});
+audio.addEventListener('pause', () => {
+  isPlaying = false; setPlayIcon(false); updateSession('paused');
+  // If something OUTSIDE the app paused the book (another app grabbing audio focus),
+  // stop the noise too — unless we're mid track-swap, where the noise covers the gap.
+  if (!cueing && ctx && ctx.state === 'running') ctx.suspend();
+});
 audio.addEventListener('ended', () => nextTrack(true));
 audio.addEventListener('timeupdate', () => {
   if (!seeking){
@@ -841,13 +855,28 @@ function setPlayIcon(playing){
     : '<path d="M8 5v14l11-7z"/>';                // play
   $('playBtn').setAttribute('aria-label', playing ? 'Pause' : 'Play');
 }
-// jump within the current chapter (clamped to its bounds)
+// jump forward/back, carrying across track boundaries (clamped to the whole book)
 function skip(sec){
   if (!active || !tracks.length) return;
+  const durs = active.durations;
+  const ready = durs && durs.length === tracks.length && durs.every(d => d > 0) && bookTotal > 0;
+  if (ready){
+    // work in whole-book time so a jump can roll into the next/previous chapter
+    const cur = (bookOffsets[active.index] || 0) + (audio.currentTime || 0);
+    const target = Math.max(0, Math.min(bookTotal, cur + sec));
+    let i = 0;
+    while (i < tracks.length - 1 && target >= bookOffsets[i+1]) i++;
+    const within = Math.max(0, target - bookOffsets[i]);
+    if (i === active.index){ audio.currentTime = within; saveProgress(); }
+    else cueTrack(i, within, isPlaying);
+    return;
+  }
+  // fallback (durations still probing): cross into an adjacent track using the current length
   const d = audio.duration || 0;
-  let t = (audio.currentTime || 0) + sec;
-  t = Math.max(0, d ? Math.min(t, d) : Math.max(0, t));
-  audio.currentTime = t;
+  const t = (audio.currentTime || 0) + sec;
+  if (d && t > d && active.index < tracks.length - 1){ cueTrack(active.index+1, t - d, isPlaying); return; }
+  if (t < 0 && active.index > 0){ cueTrack(active.index-1, 0, isPlaying); return; }
+  audio.currentTime = Math.max(0, d ? Math.min(t, d) : Math.max(0, t));
   saveProgress();
 }
 // Chapter nav with a 30s undo: after a chapter change, tapping the OPPOSITE button
