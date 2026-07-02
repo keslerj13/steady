@@ -158,7 +158,7 @@
   <!-- NOW PLAYING -->
   <div class="card">
     <div class="cardhead"><h2>Now playing</h2><button class="info-btn" type="button" aria-label="About these controls" aria-expanded="false">i</button></div>
-    <div class="info" hidden>The big button plays/pauses the audiobook <b>and</b> the background noise together — pausing stops both, so your headphones can sleep. The triangles jump back/forward (single = 15s, double = 60s). The chapter buttons change chapter — and for 30 seconds after, tapping the <b>opposite</b> one undoes an accidental change and puts you back where you were. The top bar shows your place in the whole book; the lower bar scrubs the current chapter. Tap the cover to change the picture.</div>
+    <div class="info" hidden>The big button plays/pauses the audiobook <b>and</b> the background noise together — pausing stops both, so your headphones can sleep. The triangles jump back/forward (single = 15s, double = 60s). The chapter buttons change chapter — and for 30 seconds after, tapping the <b>opposite</b> one undoes an accidental change and puts you back where you were. The top bar shows your place in the whole book; the lower bar scrubs the current chapter. Connecting or disconnecting a speaker/headphones auto-rewinds 15 seconds so you don't miss anything. Tap the cover to change the picture.</div>
 
     <div class="np-cover-wrap">
       <img id="cover" class="cover" alt="" hidden />
@@ -906,6 +906,19 @@ $('back15').onclick = () => skip(-15);
 $('fwd15').onclick = () => skip(15);
 $('back60').onclick = () => skip(-60);
 $('fwd60').onclick = () => skip(60);
+
+// Auto rewind 15s when an audio device (Bluetooth speaker / headphones) connects or
+// disconnects — you usually miss a moment while the audio switches over. The event
+// fires a burst per change, so debounce; ignore any settling event right after load.
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener){
+  const bootAt = Date.now();
+  let devTimer = null;
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    if (Date.now() - bootAt < 3000) return;     // skip the initial device-list settle
+    clearTimeout(devTimer);
+    devTimer = setTimeout(() => { if (active && tracks.length) skip(-15); }, 500);
+  });
+}
 
 // ---------- change cover ----------
 let coverCandUrls = [];
