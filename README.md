@@ -28,6 +28,9 @@ continuous background noise on the *same* play/pause button.
   jump back/forward 15 or 60 seconds (15s is also mapped to the lock-screen seek).
 - **Smart resume:** if it's been more than 5 seconds since you last listened, pressing
   play rewinds 15 seconds so you catch the lead-up to where you stopped.
+- **Auto-rewind on device switch:** connecting or disconnecting a Bluetooth
+  speaker/headphones automatically rewinds 15 seconds, so nothing is missed while
+  the audio hands off.
 - Background noise: brown / pink / white, **plus your own noise files** (tap ＋ on the
   Type row to import rain, fan, ocean, etc.). Every option — built-in or custom — is
   loudness-normalized to the same scale, so the level slider behaves identically and a
