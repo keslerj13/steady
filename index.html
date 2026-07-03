@@ -708,6 +708,7 @@ let isPlaying = false;
 let lastListenAt = 0;            // ms timestamp of last active playback (for smart resume)
 let bookOffsets = [], bookTotal = 0;
 let cueing = false;             // true while we're swapping tracks (noise should keep covering the gap)
+let wantPlaying = false;        // the user's intended play state (survives external pauses like a device switch)
 
 function cueTrack(i, time, autoplay){
   if (!tracks.length || !active) return;
@@ -731,6 +732,7 @@ function cueTrack(i, time, autoplay){
 
 async function play(){
   if (!tracks.length) return;
+  wantPlaying = true;
   buildGraph();
   // Smart resume: if it's been >5s since she last listened, rewind 15s so she
   // catches the lead-up to where she stopped (clamped to the chapter start).
@@ -743,6 +745,7 @@ async function play(){
 }
 
 async function pause(){
+  wantPlaying = false;
   audio.pause();
   // Suspend the whole context so the background noise stops too and the
   // headphones/speaker are allowed to go to sleep (saves battery).
@@ -916,7 +919,12 @@ if (navigator.mediaDevices && navigator.mediaDevices.addEventListener){
   navigator.mediaDevices.addEventListener('devicechange', () => {
     if (Date.now() - bootAt < 3000) return;     // skip the initial device-list settle
     clearTimeout(devTimer);
-    devTimer = setTimeout(() => { if (active && tracks.length) skip(-15); }, 500);
+    devTimer = setTimeout(() => {
+      if (!active || !tracks.length) return;
+      skip(-15);                                  // catch the moment lost during the switch
+      // The device switch pauses playback; if she was listening, resume on the new device.
+      if (wantPlaying){ lastListenAt = Date.now(); play(); }
+    }, 500);
   });
 }
 
