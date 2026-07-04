@@ -64,16 +64,20 @@
   .chbtn:active{transform:scale(.97);}
 
   /* slider end labels */
-  .slider-ends{display:flex; justify-content:space-between; color:var(--dim); font-size:11px; margin:-4px 0 0 104px;}
+  .slider-ends{display:flex; justify-content:space-between; color:var(--dim); font-size:11px; margin:-2px 82px 0 124px;}
 
   /* Transport */
-  .seek{display:flex; align-items:center; gap:10px; margin:14px 0 6px;}
+  .seek{display:flex; align-items:center; gap:8px; margin:14px 0 6px;}
   .seek .t{font-variant-numeric:tabular-nums; color:var(--dim); font-size:12px; min-width:38px; text-align:center;}
-  input[type=range]{ -webkit-appearance:none; appearance:none; width:100%; height:30px; background:transparent; --p:0%; --sl:var(--accent); }
-  input[type=range]::-webkit-slider-runnable-track{height:6px; border-radius:3px; background:linear-gradient(to right, var(--sl) var(--p), var(--panel2) var(--p));}
-  input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:18px; height:18px; border-radius:50%; background:var(--sl); margin-top:-6px; box-shadow:0 0 0 4px rgba(255,255,255,.10);}
-  input[type=range]::-moz-range-track{height:6px; border-radius:3px; background:linear-gradient(to right, var(--sl) var(--p), var(--panel2) var(--p));}
-  input[type=range]::-moz-range-thumb{width:18px; height:18px; border:none; border-radius:50%; background:var(--sl); box-shadow:0 0 0 4px rgba(255,255,255,.10);}
+  /* touch-action:none so dragging the slider never scrolls the page on a phone */
+  input[type=range]{ -webkit-appearance:none; appearance:none; width:100%; height:36px; background:transparent; touch-action:none; --p:0%; --sl:var(--accent); }
+  input[type=range]::-webkit-slider-runnable-track{height:7px; border-radius:4px; background:linear-gradient(to right, var(--sl) var(--p), var(--panel2) var(--p));}
+  input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:28px; height:28px; border-radius:50%; background:var(--sl); margin-top:-10.5px; box-shadow:0 0 0 4px rgba(255,255,255,.10);}
+  input[type=range]::-moz-range-track{height:7px; border-radius:4px; background:linear-gradient(to right, var(--sl) var(--p), var(--panel2) var(--p));}
+  input[type=range]::-moz-range-thumb{width:28px; height:28px; border:none; border-radius:50%; background:var(--sl); box-shadow:0 0 0 4px rgba(255,255,255,.10);}
+  /* +/- nudge buttons flanking each slider */
+  .nudge{flex:0 0 auto; width:32px; height:32px; display:flex; align-items:center; justify-content:center; background:var(--panel2); border:1px solid var(--line); color:var(--text); border-radius:9px; font-size:21px; line-height:1; cursor:pointer; touch-action:manipulation; user-select:none;}
+  .nudge:active{background:var(--line); transform:scale(.94);}
   /* per-card slider colors, so each section is easy to tell apart */
   #seek{ --sl:#6ea8fe; }            /* Now playing — blue */
   #noiseVol{ --sl:#2dd4bf; }        /* Background noise — teal */
@@ -95,9 +99,9 @@
   .jbtn:active{transform:scale(.9);}
 
   /* Sliders rows */
-  .row{display:flex; align-items:center; gap:12px; margin:10px 0;}
-  .row label{flex:0 0 92px; font-size:13px; color:var(--dim);}
-  .row .val{flex:0 0 46px; text-align:right; font-size:12px; color:var(--dim); font-variant-numeric:tabular-nums;}
+  .row{display:flex; align-items:center; gap:8px; margin:12px 0;}
+  .row label{flex:0 0 76px; font-size:12.5px; color:var(--dim);}
+  .row .val{flex:0 0 42px; text-align:right; font-size:12px; color:var(--dim); font-variant-numeric:tabular-nums;}
   .seg{display:flex; gap:6px;}
   .ntype{margin:12px 0;}
   .ntype-lbl{display:block; font-size:13px; color:var(--dim); margin-bottom:8px;}
@@ -187,7 +191,9 @@
     <!-- current chapter scrub -->
     <div class="seek">
       <span class="t" id="tCur">0:00</span>
+      <button class="nudge" id="seekM" type="button" aria-label="Back 5 seconds">−</button>
       <input type="range" id="seek" min="0" max="1000" value="0" step="1" />
+      <button class="nudge" id="seekP" type="button" aria-label="Forward 5 seconds">+</button>
       <span class="t" id="tDur">0:00</span>
     </div>
 
@@ -236,7 +242,9 @@
     <input id="noiseFile" type="file" accept="audio/*,.mp3,.m4a,.aac,.ogg,.oga,.wav,.flac,.opus" multiple hidden />
     <div class="row">
       <label>Noise level</label>
+      <button class="nudge" id="noiseM" type="button" aria-label="Lower noise level">−</button>
       <input type="range" id="noiseVol" min="0" max="100" value="35" />
+      <button class="nudge" id="noiseP" type="button" aria-label="Raise noise level">+</button>
       <span class="val" id="noiseVolVal">35%</span>
     </div>
   </div>
@@ -247,12 +255,16 @@
     <div class="info" hidden>Volume and speed apply to the book only — the background noise has its own level above. Drag the speed slider from 0.5× to 3×; it snaps to set steps.</div>
     <div class="row">
       <label>Book volume</label>
+      <button class="nudge" id="bookM" type="button" aria-label="Lower book volume">−</button>
       <input type="range" id="bookVol" min="0" max="100" value="100" />
+      <button class="nudge" id="bookP" type="button" aria-label="Raise book volume">+</button>
       <span class="val" id="bookVolVal">100%</span>
     </div>
     <div class="row">
       <label>Speed</label>
+      <button class="nudge" id="speedM" type="button" aria-label="Slower">−</button>
       <input type="range" id="speedRange" min="0" max="8" step="1" value="2" />
+      <button class="nudge" id="speedP" type="button" aria-label="Faster">+</button>
       <span class="val" id="speedVal">1×</span>
     </div>
     <div class="slider-ends"><span>0.5×</span><span>3×</span></div>
@@ -289,6 +301,7 @@
 </div>
 
 <audio id="audio" preload="auto"></audio>
+<audio id="audioB" preload="auto"></audio>
 
 <script>
 (() => {
@@ -343,7 +356,11 @@ function idbAll(store){ return tx(store,'readonly').then(s => new Promise((res,r
 function idbEntries(store){ return idb().then(db => new Promise((res,rej)=>{ const t=db.transaction(store,'readonly'), os=t.objectStore(store), vq=os.getAll(), kq=os.getAllKeys(); t.oncomplete=()=>res((kq.result||[]).map((k,i)=>({key:k, value:vq.result[i]}))); t.onerror=()=>rej(t.error); })); }
 
 // ---------- audio graph ----------
-const audio = $('audio');
+// Two audio elements: `audio` is the one currently playing; `preloader` holds the NEXT
+// track fully loaded so the hand-off at a boundary is a single instant play() call
+// (loading at the boundary is what iOS drops when the screen is locked). They swap roles.
+let audio = $('audio');
+let preloader = $('audioB');
 let ctx, noiseGain, noiseSrc, noiseConnected = false;
 let graphBuilt = false;
 
@@ -715,33 +732,99 @@ function cueTrack(i, time, autoplay){
   i = Math.max(0, Math.min(i, tracks.length-1));
   active.index = i; active.time = time||0; persistBook();
   cueing = true;               // the <audio> 'pause' from this src swap must NOT stop the noise
+  const startTime = active.time || 0;
   audio.src = tracks[i].url;
-  audio.load();
-  const apply = () => {
-    audio.currentTime = active.time || 0;
-    audio.playbackRate = S.speed;
+  audio.playbackRate = S.speed;
+  if (startTime > 0){
+    // need to seek — wait for metadata, then position and (optionally) play
+    audio.addEventListener('loadedmetadata', () => {
+      audio.currentTime = startTime;
+      cueing = false;
+      if (autoplay) play();
+    }, { once:true });
+    audio.load();
+  } else {
+    // starting at 0 (auto-advance / chapter change): play immediately so iOS keeps the
+    // audio session alive across the boundary — deferring to loadedmetadata drops the
+    // hand-off when the screen is locked.
     cueing = false;
-    updateNowPlaying();
-    if (autoplay) play();
-  };
-  audio.addEventListener('loadedmetadata', apply, { once:true });
+    if (autoplay) play(); else audio.load();
+  }
   setTimeout(() => { cueing = false; }, 5000);   // safety, in case metadata never loads
   renderList();
   updateNowPlaying();
+  preloadNext();
+}
+
+// Keep the spare element loaded with the next sequential track so the boundary is instant.
+function preloadNext(){
+  if (!active){ preloader.removeAttribute('src'); delete preloader.dataset.idx; return; }
+  const ni = active.index + 1;
+  if (ni < tracks.length){
+    if (preloader.dataset.idx !== String(ni)){
+      preloader.src = tracks[ni].url;
+      preloader.dataset.idx = String(ni);
+      preloader.playbackRate = S.speed;
+      preloader.load();
+    }
+  } else {
+    preloader.removeAttribute('src'); delete preloader.dataset.idx;
+  }
+}
+
+// Advance to the next track. If the preloader already has it ready, swap elements and
+// play instantly (the iOS-friendly fast path); otherwise fall back to a normal cue.
+function advanceToNext(){
+  if (!active) return;
+  const ni = active.index + 1;
+  if (ni >= tracks.length){ pause(); audio.currentTime = audio.duration || 0; return; }  // end of book
+  if (preloader.dataset.idx === String(ni) && preloader.readyState >= 1){
+    const old = audio;
+    audio = preloader; preloader = old;        // swap: the preloaded element becomes the player
+    try { old.pause(); } catch(e){}
+    audio.playbackRate = S.speed;
+    audio.volume = S.bookVol/100;
+    try { audio.preservesPitch = true; } catch(e){}
+    active.index = ni; active.time = 0; persistBook();
+    cueing = false;
+    try { const p = audio.play(); if (p && p.catch) p.catch(()=>{}); } catch(e){}   // instant
+    renderList(); updateNowPlaying(); updateBookBar();
+    preloadNext();                              // warm the following track into the now-free element
+  } else {
+    cueTrack(ni, 0, true);                      // preloader not ready — normal cue
+  }
+}
+
+// iOS requires each media element to be "unlocked" by a user gesture before it can be
+// played programmatically. Prime the spare element on the first play tap so the
+// background hand-off is allowed later.
+let audioUnlocked = false;
+function unlockPreloader(){
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  if (!preloader.src) return;
+  preloader.muted = true;
+  const p = preloader.play();
+  const settle = () => { try { preloader.pause(); preloader.currentTime = 0; } catch(e){} preloader.muted = false; };
+  if (p && p.then) p.then(settle).catch(() => { preloader.muted = false; }); else settle();
 }
 
 async function play(){
   if (!tracks.length) return;
   wantPlaying = true;
-  buildGraph();
   // Smart resume: if it's been >5s since she last listened, rewind 15s so she
   // catches the lead-up to where she stopped (clamped to the chapter start).
   if (lastListenAt && Date.now() - lastListenAt > 5000){
     audio.currentTime = Math.max(0, (audio.currentTime || 0) - 15);
   }
-  if (ctx.state !== 'running') await ctx.resume();
+  // Start the book FIRST and synchronously. At a track boundary (auto-advance) this
+  // must run before iOS freezes the backgrounded page, so it can't wait on the
+  // noise-engine setup or the next track's metadata.
+  try { const p = audio.play(); if (p && p.catch) p.catch(()=>{}); } catch(e){}
+  // Then bring up the background-noise engine (independent of the book).
+  buildGraph();
+  if (ctx.state !== 'running'){ try { await ctx.resume(); } catch(e){} }
   if (!noiseConnected && S.noiseType !== 'off') startNoise(S.noiseType);
-  try { await audio.play(); } catch(e){ /* autoplay blocked until gesture */ }
 }
 
 async function pause(){
@@ -752,11 +835,11 @@ async function pause(){
   if (ctx && ctx.state === 'running') await ctx.suspend();
 }
 
-function togglePlay(){ isPlaying ? pause() : play(); }
+function togglePlay(){ unlockPreloader(); isPlaying ? pause() : play(); }
 
-function nextTrack(auto){
+function nextTrack(){
   if (!active) return;
-  if (active.index < tracks.length-1) cueTrack(active.index+1, 0, true);
+  if (active.index < tracks.length-1) advanceToNext();
   else { pause(); audio.currentTime = audio.duration||0; } // end of book
 }
 function prevTrack(){
@@ -766,37 +849,45 @@ function prevTrack(){
 }
 
 // ---------- audio element events ----------
-audio.addEventListener('play', () => {
-  isPlaying = true; setPlayIcon(true); updateSession('playing');
-  // keep the background noise following the book — including if playback auto-resumed
-  if (ctx && ctx.state === 'suspended') ctx.resume();
-  if (graphBuilt && !noiseConnected && S.noiseType !== 'off') startNoise(S.noiseType);
-});
-audio.addEventListener('pause', () => {
-  isPlaying = false; setPlayIcon(false); updateSession('paused');
-  // If something OUTSIDE the app paused the book (another app grabbing audio focus),
-  // stop the noise too — unless we're mid track-swap, where the noise covers the gap.
-  if (!cueing && ctx && ctx.state === 'running') ctx.suspend();
-});
-audio.addEventListener('ended', () => nextTrack(true));
-audio.addEventListener('timeupdate', () => {
-  if (!seeking){
-    const d = audio.duration||0;
-    const pct = d ? audio.currentTime/d*100 : 0;
-    $('seek').value = pct * 10;
-    setP($('seek'), pct);
-    $('tCur').textContent = fmt(audio.currentTime);
-  }
-  // remember where we are in this book (throttled write inside saveProgress)
-  if (!audio.paused){
-    lastListenAt = Date.now();
-    if (active) active.lastListenedAt = lastListenAt;
-    saveProgress();
-  }
-  updateBookBar();
-  updateSessionPosition();
-});
-audio.addEventListener('durationchange', () => { $('tDur').textContent = fmt(audio.duration); });
+// Bound to BOTH elements; each handler ignores events from the non-active (preloading) one.
+function bindAudio(el){
+  el.addEventListener('play', ev => {
+    if (ev.currentTarget !== audio) return;
+    isPlaying = true; setPlayIcon(true); updateSession('playing');
+    // keep the background noise following the book — including if playback auto-resumed
+    if (ctx && ctx.state === 'suspended') ctx.resume();
+    if (graphBuilt && !noiseConnected && S.noiseType !== 'off') startNoise(S.noiseType);
+  });
+  el.addEventListener('pause', ev => {
+    if (ev.currentTarget !== audio) return;
+    isPlaying = false; setPlayIcon(false); updateSession('paused');
+    // If something OUTSIDE the app paused the book (another app grabbing audio focus),
+    // stop the noise too — unless we're mid track-swap, where the noise covers the gap.
+    if (!cueing && ctx && ctx.state === 'running') ctx.suspend();
+  });
+  el.addEventListener('ended', ev => { if (ev.currentTarget === audio) nextTrack(); });
+  el.addEventListener('timeupdate', ev => {
+    if (ev.currentTarget !== audio) return;
+    if (!seeking){
+      const d = audio.duration||0;
+      const pct = d ? audio.currentTime/d*100 : 0;
+      $('seek').value = pct * 10;
+      setP($('seek'), pct);
+      $('tCur').textContent = fmt(audio.currentTime);
+    }
+    // remember where we are in this book (throttled write inside saveProgress)
+    if (!audio.paused){
+      lastListenAt = Date.now();
+      if (active) active.lastListenedAt = lastListenAt;
+      saveProgress();
+    }
+    updateBookBar();
+    updateSessionPosition();
+  });
+  el.addEventListener('durationchange', ev => { if (ev.currentTarget === audio) $('tDur').textContent = fmt(audio.duration); });
+}
+bindAudio(audio);
+bindAudio(preloader);
 
 function updateNowPlaying(){
   const t = active ? tracks[active.index] : null;
@@ -910,23 +1001,39 @@ $('fwd15').onclick = () => skip(15);
 $('back60').onclick = () => skip(-60);
 $('fwd60').onclick = () => skip(60);
 
-// Auto rewind 15s when an audio device (Bluetooth speaker / headphones) connects or
-// disconnects — you usually miss a moment while the audio switches over. The event
-// fires a burst per change, so debounce; ignore any settling event right after load.
-if (navigator.mediaDevices && navigator.mediaDevices.addEventListener){
-  const bootAt = Date.now();
-  let devTimer = null;
-  navigator.mediaDevices.addEventListener('devicechange', () => {
-    if (Date.now() - bootAt < 3000) return;     // skip the initial device-list settle
-    clearTimeout(devTimer);
-    devTimer = setTimeout(() => {
-      if (!active || !tracks.length) return;
-      skip(-15);                                  // catch the moment lost during the switch
-      // The device switch pauses playback; if she was listening, resume on the new device.
-      if (wantPlaying){ lastListenAt = Date.now(); play(); }
-    }, 500);
-  });
+// Auto rewind 15s when the audio output changes (Bluetooth speaker / headphones
+// connect or disconnect) — you usually miss a moment while the audio switches over.
+let lastRouteRewind = 0;
+function onAudioRouteChange(){
+  if (!active || !tracks.length) return;
+  const now = Date.now();
+  if (now - lastRouteRewind < 2500) return;     // collapse duplicate triggers
+  lastRouteRewind = now;
+  skip(-15);                                    // catch the moment lost during the switch
+  // A device switch usually pauses playback; if she was listening, resume on the new device.
+  if (wantPlaying){ lastListenAt = Date.now(); play(); }
 }
+if (navigator.mediaDevices){
+  // priming the device list helps some browsers actually emit 'devicechange'
+  if (navigator.mediaDevices.enumerateDevices) navigator.mediaDevices.enumerateDevices().catch(()=>{});
+  if (navigator.mediaDevices.addEventListener){
+    const bootAt = Date.now();
+    navigator.mediaDevices.addEventListener('devicechange', () => {
+      if (Date.now() - bootAt < 3000) return;   // ignore the initial device-list settle
+      setTimeout(onAudioRouteChange, 500);      // let the switch complete first
+    });
+  }
+}
+// Fallback: the output latency of the audio engine changes when the system output
+// device switches (e.g. to Bluetooth). Catches route changes 'devicechange' misses.
+let lastOutLatency = null;
+setInterval(() => {
+  if (!graphBuilt || !ctx || ctx.state !== 'running') return;
+  const L = ctx.outputLatency;
+  if (typeof L !== 'number' || !(L > 0)) return;
+  if (lastOutLatency != null && Math.abs(L - lastOutLatency) > 0.04) onAudioRouteChange();
+  lastOutLatency = L;
+}, 1500);
 
 // ---------- change cover ----------
 let coverCandUrls = [];
@@ -1144,6 +1251,21 @@ speedRange.addEventListener('input', () => {
   $('speedVal').textContent = v + '×';
   setP(speedRange, +speedRange.value / 8 * 100);
 });
+
+// ---------- +/- nudge buttons on the sliders ----------
+function stepSlider(el, amt){
+  const min = +el.min || 0, max = +el.max || 100;
+  el.value = Math.max(min, Math.min(max, (+el.value) + amt));
+  el.dispatchEvent(new Event('input', { bubbles:true }));   // reuse the slider's own handler
+}
+$('noiseM').onclick = () => stepSlider(noiseVol, -5);
+$('noiseP').onclick = () => stepSlider(noiseVol, 5);
+$('bookM').onclick  = () => stepSlider(bookVol, -5);
+$('bookP').onclick  = () => stepSlider(bookVol, 5);
+$('speedM').onclick = () => stepSlider(speedRange, -1);
+$('speedP').onclick = () => stepSlider(speedRange, 1);
+$('seekM').onclick  = () => skip(-5);   // chapter scrub: nudge 5 seconds (crosses chapters)
+$('seekP').onclick  = () => skip(5);
 
 // ---------- Media Session (lock-screen controls) ----------
 function updateSession(state){
