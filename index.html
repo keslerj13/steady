@@ -298,6 +298,7 @@
   </div>
 
   <div class="footnote">Books stay on this device (saved in your browser). Nothing is uploaded.</div>
+  <div class="footnote" id="appVersion" style="margin-top:4px; opacity:.65;"></div>
 </div>
 
 <audio id="audio" preload="auto"></audio>
@@ -321,6 +322,9 @@ const setP = (el, pct) => el.style.setProperty('--p', Math.max(0, Math.min(100, 
 
 // ---------- settings (localStorage) ----------
 const LS = 'steady.state.v2';
+// Bump this on every deploy (keep it in sync with CACHE in sw.js) so the version shown
+// at the bottom of the page reflects what's actually live.
+const APP_VERSION = 'v7';
 const defaults = { noiseType:'brown', noiseVol:35, bookVol:100, speed:1, activeId:null };
 let S = Object.assign({}, defaults, JSON.parse(localStorage.getItem(LS) || '{}'));
 let saveTimer = null;
@@ -522,6 +526,29 @@ function bookTitle(arr){
   return arr.length>1 ? 'Untitled book' : arr[0].name.replace(/\.[^.]+$/,'');
 }
 
+// Tracks are stored ONE record per chapter (key `bookId#0000`), so each read/write is
+// small — much friendlier to mobile browsers (less memory, more reliable) and it lets
+// import show real progress. Older books stored all chapters in one record (key
+// `bookId`); getBookTracks/delBookTracks still handle that legacy format.
+const trackKey = (bookId, i) => bookId + '#' + String(i).padStart(4, '0');
+async function putBookTracks(bookId, trackObjs){
+  for (let i = 0; i < trackObjs.length; i++) await idbPut('tracks', trackKey(bookId, i), trackObjs[i]);
+}
+async function getBookTracks(bookId, count){
+  const legacy = await idbGet('tracks', bookId);            // old single-record format
+  if (legacy && Array.isArray(legacy.tracks)) return legacy.tracks;
+  const out = [];
+  for (let i = 0; i < (count || 0); i++){
+    const rec = await idbGet('tracks', trackKey(bookId, i));
+    if (rec) out.push(rec);
+  }
+  return out;
+}
+async function delBookTracks(bookId, count){
+  for (let i = 0; i < (count || 0); i++) await idbDel('tracks', trackKey(bookId, i));
+  await idbDel('tracks', bookId);   // also clear any legacy single-record
+}
+
 // Add a freshly-picked folder/selection as a NEW book and open it.
 async function addBook(files){
   const all = Array.from(files);
@@ -536,7 +563,7 @@ async function addBook(files){
     id, title: bookTitle(arr), addedAt: Date.now(), order: minOrder - 1,
     count: arr.length, index: 0, time: 0, cover: pickCover(all) || null
   };
-  await idbPut('tracks', id, { tracks: arr.map(f => ({ name:f.name, path:pathOf(f), blob:f })) });
+  await putBookTracks(id, arr.map(f => ({ name:f.name, path:pathOf(f), blob:f })));
   await idbPut('covers', id, all.filter(isImage));   // all candidate images, for the cover picker
   await idbPut('meta', id, meta);
   await renderLibrary();
@@ -551,9 +578,9 @@ async function openBook(id){
   if (isPlaying) await pause();
   const meta = await idbGet('meta', id);
   if (!meta) return;
-  const rec = await idbGet('tracks', id);
+  const rawTracks = await getBookTracks(id, meta.count);
   revokeUrls();
-  tracks = (rec && rec.tracks || []).map(t => ({ name:t.name, path:t.path||t.name, blob:t.blob, url:URL.createObjectURL(t.blob) }));
+  tracks = rawTracks.map(t => ({ name:t.name, path:t.path||t.name, blob:t.blob, url:URL.createObjectURL(t.blob) }));
   active = meta;
   S.activeId = id; persist();
   lastListenAt = meta.lastListenedAt || 0;   // smart-resume: gap since she last listened
@@ -585,7 +612,8 @@ function saveProgress(){
 
 async function deleteBook(id, title){
   if (!confirm(`Remove “${title}” from this device?`)) return;
-  await idbDel('tracks', id);
+  const dm = await idbGet('meta', id);
+  await delBookTracks(id, dm ? dm.count : 0);
   await idbDel('meta', id);
   await idbDel('covers', id);
   if (active && active.id === id){
@@ -1059,7 +1087,21 @@ async function exportData(){
   dump.ls[LS] = localStorage.getItem(LS);
   for (const store of BACKUP_STORES){
     const entries = await idbEntries(store);
-    dump.stores[store] = entries.map(e => ({ k:e.key, v:extractBlobs(e.value, blobs) }));
+    if (store === 'tracks'){
+      // Emit ONE entry per chapter so import can write them individually (progress +
+      // small mobile-friendly writes). Split any legacy single-record books here too.
+      const out = [];
+      for (const e of entries){
+        if (e.value && Array.isArray(e.value.tracks)){
+          e.value.tracks.forEach((t, i) => out.push({ k: trackKey(e.key, i), v: extractBlobs(t, blobs) }));
+        } else {
+          out.push({ k: e.key, v: extractBlobs(e.value, blobs) });
+        }
+      }
+      dump.stores.tracks = out;
+    } else {
+      dump.stores[store] = entries.map(e => ({ k:e.key, v:extractBlobs(e.value, blobs) }));
+    }
   }
   dump.blobs = blobs.map(b => ({ size:b.size, type:b.type }));
   const enc = new TextEncoder().encode(JSON.stringify(dump));
@@ -1276,6 +1318,7 @@ function initUI(){
   audio.preservesPitch = true;   // keep voices natural when sped up
   audio.playbackRate = S.speed;
   renderNoiseTypes(); paintSpeed(); setPlayIcon(false);
+  $('appVersion').textContent = 'Steady ' + APP_VERSION;
 }
 initUI();
 (async () => {
