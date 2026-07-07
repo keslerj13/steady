@@ -302,6 +302,7 @@
 </div>
 
 <audio id="audio" preload="auto"></audio>
+<audio id="noiseAudio" preload="auto" loop></audio>
 
 <script>
 (() => {
@@ -324,7 +325,7 @@ const setP = (el, pct) => el.style.setProperty('--p', Math.max(0, Math.min(100, 
 const LS = 'steady.state.v2';
 // Bump this on every deploy (keep it in sync with CACHE in sw.js) so the version shown
 // at the bottom of the page reflects what's actually live.
-const APP_VERSION = 'v7';
+const APP_VERSION = 'v10';
 const defaults = { noiseType:'brown', noiseVol:35, bookVol:100, speed:1, activeId:null };
 let S = Object.assign({}, defaults, JSON.parse(localStorage.getItem(LS) || '{}'));
 let saveTimer = null;
@@ -339,53 +340,68 @@ function persist(){
 const DB_NAME = 'steady-db';
 function idb(){
   return new Promise((res, rej) => {
-    const r = indexedDB.open(DB_NAME, 4);
+    const r = indexedDB.open(DB_NAME, 5);
     r.onupgradeneeded = () => {
       const db = r.result;
       if (!db.objectStoreNames.contains('meta'))   db.createObjectStore('meta');
       if (!db.objectStoreNames.contains('tracks')) db.createObjectStore('tracks');
       if (!db.objectStoreNames.contains('noise'))  db.createObjectStore('noise');
       if (!db.objectStoreNames.contains('covers')) db.createObjectStore('covers'); // candidate cover images per book
+      if (!db.objectStoreNames.contains('stats'))  db.createObjectStore('stats');  // reading history — persists after a book is deleted
     };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
   });
 }
 const tx = (store, mode) => idb().then(db => db.transaction(store, mode).objectStore(store));
-function idbPut(store, key, val){ return tx(store,'readwrite').then(s => new Promise((res,rej)=>{ const t=s.transaction; s.put(val,key); t.oncomplete=res; t.onerror=()=>rej(t.error); })); }
+function idbPut(store, key, val){ return tx(store,'readwrite').then(s => new Promise((res,rej)=>{ const t=s.transaction; try { s.put(val,key); } catch(e){ rej(e); return; } t.oncomplete=res; t.onerror=()=>rej(t.error||new Error('database write failed')); t.onabort=()=>rej(t.error||new Error('database write aborted — this device is likely out of storage space')); })); }
 function idbGet(store, key){ return tx(store,'readonly').then(s => new Promise((res,rej)=>{ const rq=s.get(key); rq.onsuccess=()=>res(rq.result); rq.onerror=()=>rej(rq.error); })); }
 function idbDel(store, key){ return tx(store,'readwrite').then(s => new Promise((res,rej)=>{ const t=s.transaction; s.delete(key); t.oncomplete=res; t.onerror=()=>rej(t.error); })); }
 function idbAll(store){ return tx(store,'readonly').then(s => new Promise((res,rej)=>{ const rq=s.getAll(); rq.onsuccess=()=>res(rq.result||[]); rq.onerror=()=>rej(rq.error); })); }
 function idbEntries(store){ return idb().then(db => new Promise((res,rej)=>{ const t=db.transaction(store,'readonly'), os=t.objectStore(store), vq=os.getAll(), kq=os.getAllKeys(); t.oncomplete=()=>res((kq.result||[]).map((k,i)=>({key:k, value:vq.result[i]}))); t.onerror=()=>rej(t.error); })); }
+// all values whose key starts with `prefix` (used for the stats store: 'b:' books, 'd:' days)
+function idbRange(store, prefix){ return tx(store,'readonly').then(s => new Promise((res,rej)=>{ const rq=s.getAll(IDBKeyRange.bound(prefix, prefix+'￿')); rq.onsuccess=()=>res(rq.result||[]); rq.onerror=()=>rej(rq.error); })); }
 
-// ---------- audio graph ----------
+// ---------- audio: book element + noise element ----------
 const audio = $('audio');
-let ctx, noiseGain, noiseSrc, noiseConnected = false;
-let graphBuilt = false;
+// The background noise plays as its OWN looping <audio> element — NOT Web Audio.
+// Two reasons this matters on iOS: (1) a media element keeps playing with the screen
+// locked, so the noise survives backgrounding; (2) there's no AudioContext to get
+// "interrupted" on lock and poison the shared audio session — which was what left the
+// BOOK advancing silently after a lock-screen pause/play. One play/pause drives both
+// elements; pausing stops the noise too so the speaker/headphones can sleep.
+const noiseAudio = $('noiseAudio');
+noiseAudio.loop = true;
 
-// Only the generated noise goes through Web Audio. The book plays straight from the
-// <audio> element (volume via audio.volume) — routing it through Web Audio breaks
-// playbackRate on iOS Safari. The single play/pause still drives both: play resumes
-// the context + starts the element; pause suspends the context + pauses the element.
-function buildGraph(){
-  if (graphBuilt) return;
-  ctx = new (window.AudioContext || window.webkitAudioContext)();
-  noiseGain = ctx.createGain();
-  noiseGain.connect(ctx.destination);
-  graphBuilt = true;
-  applyNoiseGain();
+// Level model. 100% sits near audiobook loudness (books run ~0.1 RMS) rather than
+// full-scale, and each colour gets a small perceptual trim — white hiss reads louder
+// than brown rumble at equal RMS.
+const NOISE_MAX_RMS = 0.12;
+const NOISE_TRIM = { white: 0.7, pink: 0.85, brown: 1.0 };
+// Desired OUTPUT loudness (RMS) for the current selection.
+function noiseTargetRms(){
+  if (S.noiseType === 'off') return 0;
+  return NOISE_MAX_RMS * (S.noiseVol/100) * (NOISE_TRIM[S.noiseType] || 1);
 }
 
-// generate a few seconds of looping noise of the requested colour
-function makeNoiseBuffer(type){
-  const seconds = 6, rate = ctx.sampleRate, len = seconds*rate;
-  const buf = ctx.createBuffer(1, len, rate);
-  const d = buf.getChannelData(0);
+// ---- generated noise -> a seamless looping WAV the element can play ----
+const NOISE_SR = 44100;               // sample rate of generated noise files
+const NOISE_SECS = 20;                // loop length; long enough that seams are rare
+const NOISE_FILE_RMS = 0.20;          // RMS baked into every noise file; noiseAudio.volume
+                                      // scales DOWN from here to hit noiseTargetRms().
+// Build NOISE_SECS of the requested colour, then crossfade the tail into the head so
+// the loop point is continuous — no click and, crucially, no gap of silence (silence
+// would let the Bluetooth speaker sleep, the very glitch we're preventing).
+function makeNoiseSamples(type){
+  const len = NOISE_SECS * NOISE_SR;
+  const xf = Math.floor(NOISE_SR * 0.05);   // 50ms crossfade seam
+  const total = len + xf;
+  const d = new Float32Array(total);
   if (type === 'white'){
-    for (let i=0;i<len;i++) d[i] = Math.random()*2-1;
+    for (let i=0;i<total;i++) d[i] = Math.random()*2-1;
   } else if (type === 'pink'){
     let b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0;
-    for (let i=0;i<len;i++){
+    for (let i=0;i<total;i++){
       const w = Math.random()*2-1;
       b0=0.99886*b0+w*0.0555179; b1=0.99332*b1+w*0.0750759;
       b2=0.96900*b2+w*0.1538520; b3=0.86650*b3+w*0.3104856;
@@ -394,83 +410,98 @@ function makeNoiseBuffer(type){
     }
   } else { // brown
     let last=0;
-    for (let i=0;i<len;i++){
+    for (let i=0;i<total;i++){
       const w=Math.random()*2-1;
       last=(last+0.02*w)/1.02; d[i]=last*3.5;
     }
   }
-  // Normalize every colour to the same loudness (unit RMS) so the level slider
-  // behaves consistently no matter which noise is selected, and so the hot/raw
-  // generators (esp. brown) can't blow out or clip.
-  let sumsq = 0;
-  for (let i=0;i<len;i++) sumsq += d[i]*d[i];
-  const norm = 1 / (Math.sqrt(sumsq/len) || 1);
-  for (let i=0;i<len;i++) d[i] *= norm;
-  // gently fade the loop seam so it doesn't click
-  const fade = Math.floor(rate*0.02);
-  for (let i=0;i<fade;i++){ const g=i/fade; d[i]*=g; d[len-1-i]*=g; }
-  return buf;
-}
-
-// The noise buffer above is unit-RMS; this scales it to an actual level. The
-// ceiling is chosen so 100% sits roughly at audiobook loudness (books run ~0.1
-// RMS) rather than blasting full-scale, and each colour gets a small perceptual
-// trim — white hiss reads louder than brown rumble at equal RMS.
-const NOISE_MAX_RMS = 0.12;
-const NOISE_TRIM = { white: 0.7, pink: 0.85, brown: 1.0 };
-// Desired OUTPUT loudness (RMS) for the current selection.
-function noiseTargetRms(){
-  if (S.noiseType === 'off') return 0;
-  return NOISE_MAX_RMS * (S.noiseVol/100) * (NOISE_TRIM[S.noiseType] || 1);
-}
-// The playing source's own RMS (1 for generated buffers, measured for custom files).
-let currentNoiseRms = 1;
-function applyNoiseGain(){
-  if (!graphBuilt) return;
-  noiseGain.gain.value = (S.noiseType === 'off') ? 0 : noiseTargetRms() / (currentNoiseRms || 1);
-}
-
-// Custom noise files: cache of decoded {buffer, rms} by id.
-const customBufCache = new Map();
-async function getCustomBuffer(id){
-  if (customBufCache.has(id)) return customBufCache.get(id);
-  const rec = await idbGet('noise', id);
-  if (!rec) return null;
-  const buffer = await ctx.decodeAudioData(await rec.blob.arrayBuffer());
-  const ch = buffer.getChannelData(0);
-  let s = 0; for (let i=0;i<ch.length;i++) s += ch[i]*ch[i];
-  const out = { buffer, rms: Math.sqrt(s/ch.length) || 1 };
-  customBufCache.set(id, out);
+  // seamless loop: blend the extra tail (d[len..len+xf)) into the head (d[0..xf))
+  const out = new Float32Array(len);
+  out.set(d.subarray(0, len));
+  for (let i=0;i<xf;i++){ const w=i/xf; out[i] = d[i]*w + d[len+i]*(1-w); }
+  // normalize the whole loop to the target file RMS
+  let sumsq = 0; for (let i=0;i<len;i++) sumsq += out[i]*out[i];
+  const norm = NOISE_FILE_RMS / (Math.sqrt(sumsq/len) || 1);
+  for (let i=0;i<len;i++) out[i] *= norm;
   return out;
 }
+function encodeWav(samples){          // 16-bit PCM mono WAV
+  const n = samples.length, buf = new ArrayBuffer(44 + n*2), v = new DataView(buf);
+  const wr = (o,s) => { for (let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); };
+  wr(0,'RIFF'); v.setUint32(4, 36 + n*2, true); wr(8,'WAVE');
+  wr(12,'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, NOISE_SR, true); v.setUint32(28, NOISE_SR*2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  wr(36,'data'); v.setUint32(40, n*2, true);
+  let o = 44;
+  for (let i=0;i<n;i++){ const s = Math.max(-1, Math.min(1, samples[i])); v.setInt16(o, s*32767, true); o += 2; }
+  return new Blob([buf], { type:'audio/wav' });
+}
+const genNoiseUrls = new Map();       // type -> object URL of its generated WAV
+function makeNoiseUrl(type){
+  if (!genNoiseUrls.has(type)) genNoiseUrls.set(type, URL.createObjectURL(encodeWav(makeNoiseSamples(type))));
+  return genNoiseUrls.get(type);
+}
 
+// ---- custom noise files: object URLs + measured loudness ----
+const customUrls = new Map();         // id -> object URL of the stored blob
+const customRms  = new Map();         // id -> measured RMS
+function customUrl(id, blob){
+  if (!customUrls.has(id)) customUrls.set(id, URL.createObjectURL(blob));
+  return customUrls.get(id);
+}
+// Measure a custom file's loudness with an OfflineAudioContext — it renders to a buffer
+// and never touches the hardware audio session, so (unlike a real AudioContext) it can't
+// poison background playback. Falls back to the file-target RMS if decoding isn't available.
+async function measureCustomRms(id, blob){
+  if (customRms.has(id)) return customRms.get(id);
+  let rms = NOISE_FILE_RMS;
+  try {
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const oac = new OAC(1, 1, 44100);
+    const b = await oac.decodeAudioData(await blob.arrayBuffer());
+    const ch = b.getChannelData(0);
+    let s = 0; for (let i=0;i<ch.length;i++) s += ch[i]*ch[i];
+    rms = Math.sqrt(s/ch.length) || NOISE_FILE_RMS;
+  } catch(e){}
+  customRms.set(id, rms);
+  return rms;
+}
+
+// RMS of whatever file is currently loaded into the noise element (so volume math holds).
+let currentNoiseFileRms = NOISE_FILE_RMS;
+function applyNoiseVol(){
+  const v = (S.noiseType === 'off') ? 0 : noiseTargetRms() / (currentNoiseFileRms || NOISE_FILE_RMS);
+  noiseAudio.volume = Math.max(0, Math.min(1, v));   // media volume can only attenuate (0–1)
+}
+
+// Start (or switch) the noise element. Always called from inside a user gesture
+// (play button / lock-screen action / noise-type tap) so iOS permits the playback.
 async function startNoise(type){
-  if (!graphBuilt) return;
-  stopNoise();
-  if (type === 'off') return;
-  let buffer, rms;
+  type = type || S.noiseType;
+  if (type === 'off'){ stopNoise(); return; }
+  let url, fileRms;
   if (type[0] === 'c'){                 // custom 'c:<id>'
-    let c = null;
-    try { c = await getCustomBuffer(type.slice(2)); } catch(e){ c = null; }
-    if (!c){ return; }                  // file missing or undecodable
-    buffer = c.buffer; rms = c.rms;
+    const id = type.slice(2);
+    const rec = await idbGet('noise', id);
+    if (!rec) return;                   // file missing
+    url = customUrl(id, rec.blob);
+    fileRms = await measureCustomRms(id, rec.blob);
   } else {
-    buffer = makeNoiseBuffer(type); rms = 1;   // generated buffers are unit-RMS
+    url = makeNoiseUrl(type);
+    fileRms = NOISE_FILE_RMS;
   }
-  if (S.noiseType !== type) return;      // user switched while we were decoding
-  currentNoiseRms = rms;
-  noiseSrc = ctx.createBufferSource();
-  noiseSrc.buffer = buffer;
-  noiseSrc.loop = true;
-  noiseSrc.connect(noiseGain);
-  noiseSrc.start();
-  applyNoiseGain();
-  noiseConnected = true;
+  if (S.noiseType !== type) return;      // user switched while we were awaiting
+  currentNoiseFileRms = fileRms || NOISE_FILE_RMS;
+  const cur = noiseAudio.currentSrc || noiseAudio.src;
+  if (cur !== url) noiseAudio.src = url;
+  applyNoiseVol();
+  if (cur === url && !noiseAudio.paused) return;   // already playing the right thing
+  try { const p = noiseAudio.play(); if (p && p.catch) p.catch(()=>{}); } catch(e){}
+  // Re-assert the book as the lock-screen "now playing" item, in case starting a second
+  // element made iOS briefly consider the noise the active media.
+  updateSession(isPlaying ? 'playing' : 'paused');
 }
-function stopNoise(){
-  if (noiseSrc){ try{ noiseSrc.stop(); }catch(e){} noiseSrc.disconnect(); noiseSrc = null; }
-  noiseConnected = false;
-}
+function stopNoise(){ try { noiseAudio.pause(); } catch(e){} }
 
 // ---------- library / current book ----------
 let tracks = [];   // active book's tracks: {name, path, blob, url}
@@ -795,18 +826,16 @@ async function play(){
   try { const p = audio.play(); if (p && p.catch) p.catch(()=>{}); } catch(e){}
   applyRate();
   setTimeout(applyRate, 150);   // iOS often resets the rate right after play starts
-  // Then bring up the background-noise engine (independent of the book).
-  buildGraph();
-  if (ctx.state !== 'running'){ try { await ctx.resume(); } catch(e){} }
-  if (!noiseConnected && S.noiseType !== 'off') startNoise(S.noiseType);
+  // Then the background noise (its own looping element). Don't restart it if it's
+  // already running (e.g. we came in mid track-swap).
+  if (S.noiseType !== 'off' && noiseAudio.paused) startNoise(S.noiseType);
 }
 
 async function pause(){
   wantPlaying = false;
   audio.pause();
-  // Suspend the whole context so the background noise stops too and the
-  // headphones/speaker are allowed to go to sleep (saves battery).
-  if (ctx && ctx.state === 'running') await ctx.suspend();
+  // Stop the noise too so the speaker/headphones are allowed to sleep (saves battery).
+  stopNoise();
 }
 
 function togglePlay(){ isPlaying ? pause() : play(); }
@@ -814,7 +843,7 @@ function togglePlay(){ isPlaying ? pause() : play(); }
 function nextTrack(){
   if (!active) return;
   if (active.index < tracks.length-1) cueTrack(active.index+1, 0, true);
-  else { pause(); audio.currentTime = audio.duration||0; } // end of book
+  else { markBookFinished(active.id, active.title, active.cover); pause(); audio.currentTime = audio.duration||0; } // end of book
 }
 function prevTrack(){
   if (!active) return;
@@ -826,9 +855,9 @@ function prevTrack(){
 audio.addEventListener('play', () => {
   isPlaying = true; setPlayIcon(true); updateSession('playing');
   applyRate();
-  // keep the background noise following the book — including if playback auto-resumed
-  if (ctx && ctx.state === 'suspended') ctx.resume();
-  if (graphBuilt && !noiseConnected && S.noiseType !== 'off') startNoise(S.noiseType);
+  // keep the noise following the book — including when playback auto-resumes (e.g. after
+  // a device switch). Don't restart it mid track-swap; it's already covering the gap.
+  if (S.noiseType !== 'off' && noiseAudio.paused) startNoise(S.noiseType);
 });
 audio.addEventListener('playing', applyRate);
 audio.addEventListener('ratechange', () => {
@@ -837,9 +866,10 @@ audio.addEventListener('ratechange', () => {
 });
 audio.addEventListener('pause', () => {
   isPlaying = false; setPlayIcon(false); updateSession('paused');
+  flushStats();   // bank the listening time from this session promptly
   // If something OUTSIDE the app paused the book (another app grabbing audio focus),
   // stop the noise too — unless we're mid track-swap, where the noise covers the gap.
-  if (!cueing && ctx && ctx.state === 'running') ctx.suspend();
+  if (!cueing) stopNoise();
 });
 audio.addEventListener('ended', () => nextTrack());
 audio.addEventListener('timeupdate', () => {
@@ -996,16 +1026,8 @@ if (navigator.mediaDevices){
     });
   }
 }
-// Fallback: the output latency of the audio engine changes when the system output
-// device switches (e.g. to Bluetooth). Catches route changes 'devicechange' misses.
-let lastOutLatency = null;
-setInterval(() => {
-  if (!graphBuilt || !ctx || ctx.state !== 'running') return;
-  const L = ctx.outputLatency;
-  if (typeof L !== 'number' || !(L > 0)) return;
-  if (lastOutLatency != null && Math.abs(L - lastOutLatency) > 0.04) onAudioRouteChange();
-  lastOutLatency = L;
-}, 1500);
+// (The old Web Audio output-latency route-change fallback was removed along with the
+// Web Audio engine; the 'devicechange' listener above is the route-switch detector.)
 
 // ---------- change cover ----------
 let coverCandUrls = [];
@@ -1123,18 +1145,29 @@ async function importData(file){
   setBackupStatus('Importing…');
   try {
     if (file.size < 8) throw new Error('the file is empty or too small.');
-    const len = new DataView(await file.slice(0,4).arrayBuffer()).getUint32(0, false);
-    if (len <= 0 || len + 4 > file.size){
+    // Pull the ENTIRE backup into memory once, up front. Over a multi-minute import iOS
+    // can invalidate a picked file's handle, and an iCloud-backed file may only be
+    // partially downloaded — either way a later .slice() read dies deep in the loop
+    // (the "stops at ~3%" failure that never happens on a computer). Reading it all now
+    // forces a full local copy and fails early + clearly if it can't; every read below is
+    // then pure in-memory RAM, so the loop can't die partway.
+    setBackupStatus('Reading file…');
+    let buf;
+    try { buf = await file.arrayBuffer(); }
+    catch(e){ throw new Error('couldn’t read the whole file into memory. If it lives in iCloud/Files, open the Files app, tap the backup to download it fully (until the cloud icon is gone), then import again.'); }
+    if (buf.byteLength < 8) throw new Error('the file is empty or too small.');
+    const len = new DataView(buf, 0, 4).getUint32(0, false);
+    if (len <= 0 || len + 4 > buf.byteLength){
       throw new Error('the file header is invalid — it was likely altered in transfer. Send the backup by AirDrop or a direct file copy rather than email/messaging, which can corrupt it.');
     }
     let dump;
-    try { dump = JSON.parse(await file.slice(4, 4+len).text()); }
+    try { dump = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, len))); }
     catch(e){ throw new Error('the backup contents could not be read — the file was probably corrupted in transfer. Try AirDrop or a direct copy.'); }
     if (!dump || !dump.stores) throw new Error('this doesn’t look like a Steady backup file.');
     const offsets = []; let off = 4 + len;
     (dump.blobs||[]).forEach(b => { offsets.push(off); off += b.size; });
-    if (off > file.size) throw new Error('the backup is incomplete (some audio is missing) — the file may have been truncated during download or transfer.');
-    const getBlob = i => file.slice(offsets[i], offsets[i] + dump.blobs[i].size, dump.blobs[i].type);
+    if (off > buf.byteLength) throw new Error('the backup is incomplete (some audio is missing) — the file may have been truncated during download or transfer.');
+    const getBlob = i => new Blob([new Uint8Array(buf, offsets[i], dump.blobs[i].size)], { type: dump.blobs[i].type });
     // Write 'meta' LAST so a book never appears in the Bookshelf until its audio is fully
     // stored — if the import is interrupted, you get missing books, never broken ones.
     const IMPORT_ORDER = ['tracks','covers','noise','meta'];
@@ -1152,7 +1185,15 @@ async function importData(file){
     setTimeout(() => location.reload(), 600);
   } catch(err){
     setBackupStatus('Import failed');
-    alert('Import failed: ' + (err && err.message ? err.message : err));
+    let msg = (err && (err.message || err.name)) || 'unknown error';
+    try {
+      if (navigator.storage && navigator.storage.estimate){
+        const est = await navigator.storage.estimate();
+        const usedMB = Math.round((est.usage||0)/1048576), quotaMB = Math.round((est.quota||0)/1048576);
+        msg += `  ·  storage: ${usedMB} MB used of ~${quotaMB} MB available`;
+      }
+    } catch(e){}
+    alert('Import failed: ' + msg + '\n\nIf this is a space problem: free up room on the device (remove some books), or do the import on a computer, which has far more room.');
   }
 }
 $('exportBtn').onclick = exportData;
@@ -1194,10 +1235,8 @@ function renderNoiseTypes(){
 }
 function selectNoise(type){
   S.noiseType = type; persist(); renderNoiseTypes();
-  if (!graphBuilt) return;
-  if (type === 'off'){ stopNoise(); applyNoiseGain(); }
-  else if (isPlaying || (ctx && ctx.state==='running')) startNoise(type);
-  else stopNoise();   // will start fresh on next play
+  if (type === 'off' || !isPlaying){ stopNoise(); return; }
+  startNoise(type);   // switching while playing — swap the noise immediately
 }
 async function addNoise(files){
   const arr = Array.from(files).filter(isAudio);
@@ -1214,10 +1253,11 @@ async function addNoise(files){
 async function deleteNoise(id, name){
   if (!confirm(`Remove noise “${name}”?`)) return;
   await idbDel('noise', id);
-  customBufCache.delete(id);
+  customRms.delete(id);
+  if (customUrls.has(id)){ URL.revokeObjectURL(customUrls.get(id)); customUrls.delete(id); }
   if (S.noiseType === 'c:'+id){ S.noiseType = 'brown'; persist(); }
   await loadNoiseList();
-  if (graphBuilt && S.noiseType !== 'off' && (isPlaying || (ctx && ctx.state==='running'))) startNoise(S.noiseType);
+  if (S.noiseType !== 'off' && isPlaying) startNoise(S.noiseType); else stopNoise();
 }
 $('noiseFile').addEventListener('change', e => { addNoise(e.target.files); e.target.value=''; });
 
@@ -1226,7 +1266,7 @@ noiseVol.addEventListener('input', () => {
   S.noiseVol = +noiseVol.value; persist();
   $('noiseVolVal').textContent = S.noiseVol + '%';
   setP(noiseVol, S.noiseVol);
-  applyNoiseGain();
+  applyNoiseVol();
 });
 
 // ---------- UI: book volume + speed ----------
@@ -1311,6 +1351,96 @@ document.querySelectorAll('.info-btn').forEach(btn => {
   });
 });
 
+// ---------- reading stats (a permanent history that survives book deletion) ----------
+// One 'stats' store: keys 'b:<bookId>' = per-book lifetime stats, 'd:<YYYY-MM-DD>' = daily seconds.
+const STATS_SEED_FLAG = 'steady.statsSeeded';
+function localDayKey(ts){
+  const d = ts ? new Date(ts) : new Date();
+  return 'd:' + d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+let statsPending = { days:{}, books:{} };
+let statsLastFlush = 0;
+async function flushStats(){
+  const days = statsPending.days, books = statsPending.books;
+  if (!Object.keys(days).length && !Object.keys(books).length) return;
+  statsPending = { days:{}, books:{} };
+  statsLastFlush = Date.now();
+  try {
+    for (const k in days){
+      const rec = (await idbGet('stats', k)) || { date:k.slice(2), sec:0 };
+      rec.sec += days[k]; await idbPut('stats', k, rec);
+    }
+    for (const id in books){
+      const key = 'b:'+id;
+      let rec = await idbGet('stats', key);
+      const now = Date.now();
+      if (!rec) rec = { id, title:'', firstAt:now, listenedSec:0, timesFinished:0, genre:null };
+      rec.listenedSec += books[id];
+      rec.lastAt = now;
+      if (active && active.id === id){
+        rec.title = active.title;
+        if (active.genre != null) rec.genre = active.genre;
+        if (active.cover) rec.cover = active.cover;
+        if (bookTotal > 0) rec.durationSec = bookTotal;
+      }
+      await idbPut('stats', key, rec);
+    }
+  } catch(e){ /* stats are best-effort — never let them break playback */ }
+}
+function statsTick(){
+  if (!active || audio.paused) return;   // only count real, active listening time
+  const d = localDayKey();
+  statsPending.days[d] = (statsPending.days[d]||0) + 1;
+  statsPending.books[active.id] = (statsPending.books[active.id]||0) + 1;
+  if (Date.now() - statsLastFlush > 15000) flushStats();
+}
+setInterval(statsTick, 1000);
+window.addEventListener('pagehide', flushStats);
+
+async function markBookFinished(id, title, cover){
+  try {
+    const key = 'b:'+id;
+    let rec = await idbGet('stats', key) || { id, title:title||'', firstAt:Date.now(), listenedSec:0, timesFinished:0, genre:null };
+    rec.finishedAt = Date.now();
+    rec.timesFinished = (rec.timesFinished||0) + 1;
+    if (title) rec.title = title;
+    if (cover) rec.cover = cover;
+    await idbPut('stats', key, rec);
+  } catch(e){}
+}
+
+// One-time: seed history from the current library so the dashboard isn't empty on day one.
+async function seedStats(){
+  try {
+    if (localStorage.getItem(STATS_SEED_FLAG)) return;
+    for (const m of await idbAll('meta')){
+      const key = 'b:'+m.id;
+      if (await idbGet('stats', key)) continue;
+      const dur = (m.durations||[]).reduce((a,b)=>a+(b||0), 0);
+      await idbPut('stats', key, {
+        id:m.id, title:m.title, cover:m.cover||null, genre:m.genre||null,
+        addedAt:m.addedAt||Date.now(), firstAt:m.addedAt||Date.now(),
+        lastAt:m.lastListenedAt||m.addedAt||Date.now(),
+        listenedSec:0, durationSec:dur, timesFinished:0, seeded:true
+      });
+    }
+    localStorage.setItem(STATS_SEED_FLAG, '1');
+  } catch(e){}
+}
+
+// Reclaim storage from half-finished/force-closed imports: delete any chapter records
+// whose book no longer exists in the library (meta is written last, so orphans = junk).
+async function cleanOrphanTracks(){
+  try {
+    const metaIds = new Set((await idbAll('meta')).map(m => m && m.id).filter(Boolean));
+    const keys = await tx('tracks','readonly').then(s => new Promise((res,rej)=>{ const rq=s.getAllKeys(); rq.onsuccess=()=>res(rq.result||[]); rq.onerror=()=>rej(rq.error); }));
+    for (const k of keys){
+      const bookId = String(k).split('#')[0];
+      if (!metaIds.has(bookId)) await idbDel('tracks', k);
+    }
+  } catch(e){}
+}
+
 function initUI(){
   noiseVol.value = S.noiseVol; $('noiseVolVal').textContent = S.noiseVol+'%'; setP(noiseVol, S.noiseVol);
   bookVol.value = S.bookVol; $('bookVolVal').textContent = S.bookVol+'%'; setP(bookVol, S.bookVol);
@@ -1321,10 +1451,16 @@ function initUI(){
   $('appVersion').textContent = 'Steady ' + APP_VERSION;
 }
 initUI();
+// Ask the browser to keep our storage persistent (bigger quota, not auto-evicted) —
+// helps large imports fit and protects the library/history from being cleared.
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
+
 (async () => {
   await loadNoiseList();
   await renderLibrary();
   if (S.activeId) await openBook(S.activeId);
+  seedStats();          // one-time: pre-fill reading history from the current library
+  cleanOrphanTracks();  // reclaim space from any half-finished imports
 })();
 
 // flush the active book's position when leaving

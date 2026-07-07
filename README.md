@@ -7,9 +7,9 @@ continuous background noise on the *same* play/pause button.
 - **No more breath glitches.** The background noise is genuinely continuous, so during
   the audiobook's tiny silences the speaker never hears true silence — it never has to
   re-acquire the Bluetooth connection, which is what causes the dropout/glitch.
-- **No battery drain when paused.** Pause stops *everything* (it suspends the whole
-  audio engine), so the headphones are allowed to go to sleep. No separate noise app
-  left running in the background.
+- **No battery drain when paused.** Pause stops *everything* (both the book and the
+  noise), so the headphones are allowed to go to sleep. No separate noise app left
+  running in the background.
 
 ## Features
 - **A library of books.** Add as many as you like — each is its own folder. Tap a
@@ -74,9 +74,12 @@ the icon, replace that file and regenerate `icon-192.png`, `icon-512.png`, and
 ## Local test
 From this folder: `python3 -m http.server 8123` then open `http://localhost:8123`.
 
-## One thing to confirm on her actual phone
-Android Chrome normally keeps audio playing with the screen off. Because this app mixes
-the book and the noise through the Web Audio engine, do a real-world check: start
-playback, lock the screen, put it in a pocket for a minute. If audio ever stops on lock
-(some Android builds are stricter), tell me — there's a fallback design that plays the
-noise as a looping audio track instead, which is even more bulletproof for background.
+## Background playback (screen off / locked)
+Both the book **and** the noise play as plain looping `<audio>` media elements — no Web
+Audio. That's deliberate: a media element keeps playing when the screen locks, and there's
+no AudioContext to get "interrupted" on lock (which on iOS was silently muting the book
+after a lock-screen pause/play). Generated brown/pink/white noise is rendered to a seamless
+20-second looping WAV (the loop point is crossfaded so there's no click and no gap of
+silence — silence is what would let a Bluetooth speaker nod off). Do a real-world check on
+her phone: start playback, lock the screen, pocket it for a minute, then pause/play from the
+lock screen and confirm sound resumes.
