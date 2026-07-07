@@ -325,7 +325,7 @@ const setP = (el, pct) => el.style.setProperty('--p', Math.max(0, Math.min(100, 
 const LS = 'steady.state.v2';
 // Bump this on every deploy (keep it in sync with CACHE in sw.js) so the version shown
 // at the bottom of the page reflects what's actually live.
-const APP_VERSION = 'v10';
+const APP_VERSION = 'v11';
 const defaults = { noiseType:'brown', noiseVol:35, bookVol:100, speed:1, activeId:null };
 let S = Object.assign({}, defaults, JSON.parse(localStorage.getItem(LS) || '{}'));
 let saveTimer = null;
@@ -387,12 +387,22 @@ function noiseTargetRms(){
 // ---- generated noise -> a seamless looping WAV the element can play ----
 const NOISE_SR = 44100;               // sample rate of generated noise files
 const NOISE_SECS = 20;                // loop length; long enough that seams are rare
-const NOISE_FILE_RMS = 0.20;          // RMS baked into every noise file; noiseAudio.volume
-                                      // scales DOWN from here to hit noiseTargetRms().
-// Build NOISE_SECS of the requested colour, then crossfade the tail into the head so
-// the loop point is continuous — no click and, crucially, no gap of silence (silence
-// would let the Bluetooth speaker sleep, the very glitch we're preventing).
-function makeNoiseSamples(type){
+const NOISE_FILE_RMS = 0.20;          // baked file level when .volume does the attenuation
+
+// iOS/iPadOS ignore HTMLMediaElement.volume entirely — it's effectively read-only at 1, so
+// we can't turn the noise down with .volume there. Detect it once: where .volume works
+// (Android/desktop) we bake the file at a fixed level and scale with .volume; where it
+// doesn't (iOS) we BAKE THE CHOSEN LEVEL straight into the generated file and regenerate
+// it when the slider moves. Either way the level slider actually does something.
+const VOLUME_SETTABLE = (() => {
+  try { noiseAudio.volume = 0.3; const ok = Math.abs(noiseAudio.volume - 0.3) < 0.05; noiseAudio.volume = 1; return ok; }
+  catch(e){ return false; }
+})();
+
+// Build NOISE_SECS of the requested colour at a target RMS, then crossfade the tail into
+// the head so the loop point is continuous — no click and, crucially, no gap of silence
+// (silence would let the Bluetooth speaker sleep, the very glitch we're preventing).
+function makeNoiseSamples(type, targetRms){
   const len = NOISE_SECS * NOISE_SR;
   const xf = Math.floor(NOISE_SR * 0.05);   // 50ms crossfade seam
   const total = len + xf;
@@ -419,13 +429,13 @@ function makeNoiseSamples(type){
   const out = new Float32Array(len);
   out.set(d.subarray(0, len));
   for (let i=0;i<xf;i++){ const w=i/xf; out[i] = d[i]*w + d[len+i]*(1-w); }
-  // normalize the whole loop to the target file RMS
+  // normalize the whole loop to the requested RMS
   let sumsq = 0; for (let i=0;i<len;i++) sumsq += out[i]*out[i];
-  const norm = NOISE_FILE_RMS / (Math.sqrt(sumsq/len) || 1);
+  const norm = (targetRms || NOISE_FILE_RMS) / (Math.sqrt(sumsq/len) || 1);
   for (let i=0;i<len;i++) out[i] *= norm;
   return out;
 }
-function encodeWav(samples){          // 16-bit PCM mono WAV
+function encodeWav(samples){          // 16-bit PCM mono WAV at NOISE_SR
   const n = samples.length, buf = new ArrayBuffer(44 + n*2), v = new DataView(buf);
   const wr = (o,s) => { for (let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); };
   wr(0,'RIFF'); v.setUint32(4, 36 + n*2, true); wr(8,'WAVE');
@@ -436,29 +446,36 @@ function encodeWav(samples){          // 16-bit PCM mono WAV
   for (let i=0;i<n;i++){ const s = Math.max(-1, Math.min(1, samples[i])); v.setInt16(o, s*32767, true); o += 2; }
   return new Blob([buf], { type:'audio/wav' });
 }
-const genNoiseUrls = new Map();       // type -> object URL of its generated WAV
+// The RMS the noise FILE itself should carry: on iOS that's the actual target (the file
+// is the only way to set the level); elsewhere it's the fixed level and .volume trims it.
+function bakedRms(){ return VOLUME_SETTABLE ? NOISE_FILE_RMS : Math.max(0.0005, noiseTargetRms()); }
+const genNoiseUrls = new Map();       // key -> object URL of a generated WAV
 function makeNoiseUrl(type){
-  if (!genNoiseUrls.has(type)) genNoiseUrls.set(type, URL.createObjectURL(encodeWav(makeNoiseSamples(type))));
-  return genNoiseUrls.get(type);
+  // when baking, cache per colour+level so identical files aren't regenerated
+  const key = VOLUME_SETTABLE ? type : (type + ':' + Math.round(noiseTargetRms()*1000));
+  if (!genNoiseUrls.has(key)) genNoiseUrls.set(key, URL.createObjectURL(encodeWav(makeNoiseSamples(type, bakedRms()))));
+  return genNoiseUrls.get(key);
 }
 
 // ---- custom noise files: object URLs + measured loudness ----
-const customUrls = new Map();         // id -> object URL of the stored blob
+const customUrls = new Map();         // id -> object URL of the raw stored blob (.volume path)
 const customRms  = new Map();         // id -> measured RMS
+const customBaked = new Map();        // 'id:level' -> object URL of the level-baked WAV (iOS path)
 function customUrl(id, blob){
   if (!customUrls.has(id)) customUrls.set(id, URL.createObjectURL(blob));
   return customUrls.get(id);
 }
-// Measure a custom file's loudness with an OfflineAudioContext — it renders to a buffer
-// and never touches the hardware audio session, so (unlike a real AudioContext) it can't
-// poison background playback. Falls back to the file-target RMS if decoding isn't available.
+// Decode a custom file with an OfflineAudioContext (renders to a buffer, never touches the
+// hardware audio session, so it can't poison background playback) to measure its loudness.
+async function decodeCustom(blob){
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  return new OAC(1, 1, 44100).decodeAudioData(await blob.arrayBuffer());
+}
 async function measureCustomRms(id, blob){
   if (customRms.has(id)) return customRms.get(id);
   let rms = NOISE_FILE_RMS;
   try {
-    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    const oac = new OAC(1, 1, 44100);
-    const b = await oac.decodeAudioData(await blob.arrayBuffer());
+    const b = await decodeCustom(blob);
     const ch = b.getChannelData(0);
     let s = 0; for (let i=0;i<ch.length;i++) s += ch[i]*ch[i];
     rms = Math.sqrt(s/ch.length) || NOISE_FILE_RMS;
@@ -466,12 +483,40 @@ async function measureCustomRms(id, blob){
   customRms.set(id, rms);
   return rms;
 }
+// iOS custom-noise level: decode, scale to the target RMS, re-encode to a WAV. (The only
+// way to change a custom file's level where .volume is ignored.) Cached per level.
+async function customBakedUrl(id, blob, targetRms){
+  const key = id + ':' + Math.round(targetRms*1000);
+  if (customBaked.has(key)) return customBaked.get(key);
+  const dec = await decodeCustom(blob);
+  const n = dec.length, L = dec.getChannelData(0), R = dec.numberOfChannels>1 ? dec.getChannelData(1) : null;
+  const mono = new Float32Array(n);
+  let s = 0; for (let i=0;i<n;i++){ const x = R ? (L[i]+R[i])*0.5 : L[i]; mono[i]=x; s += x*x; }
+  const gain = targetRms / (Math.sqrt(s/n) || targetRms);
+  for (let i=0;i<n;i++) mono[i] *= gain;
+  const url = URL.createObjectURL(encodeWav(mono));
+  customBaked.set(key, url);
+  return url;
+}
 
-// RMS of whatever file is currently loaded into the noise element (so volume math holds).
+// RMS of whatever file is currently loaded into the noise element (so .volume math holds).
 let currentNoiseFileRms = NOISE_FILE_RMS;
-function applyNoiseVol(){
+// Set the element volume without side effects. On iOS this is a no-op (stays 1) and the
+// file itself carries the level; elsewhere it attenuates to hit the target.
+function setNoiseElementVolume(){
+  if (!VOLUME_SETTABLE){ noiseAudio.volume = 1; return; }
   const v = (S.noiseType === 'off') ? 0 : noiseTargetRms() / (currentNoiseFileRms || NOISE_FILE_RMS);
-  noiseAudio.volume = Math.max(0, Math.min(1, v));   // media volume can only attenuate (0–1)
+  noiseAudio.volume = Math.max(0, Math.min(1, v));
+}
+// Called continuously as the level slider moves. Where .volume works this attenuates
+// instantly; where it's ignored (iOS) nothing changes until the slider is RELEASED — see
+// refreshBakedNoise(), which regenerates the file at the new level from inside the release
+// (or +/- tap) gesture. iOS won't let a media element restart outside a user gesture, so a
+// debounced timer can't do this — it must ride the gesture.
+function applyNoiseVol(){ setNoiseElementVolume(); }
+function refreshBakedNoise(){
+  if (VOLUME_SETTABLE || S.noiseType === 'off' || !isPlaying || noiseAudio.paused) return;
+  startNoise(S.noiseType);   // re-bake at the new level and swap
 }
 
 // Start (or switch) the noise element. Always called from inside a user gesture
@@ -479,22 +524,22 @@ function applyNoiseVol(){
 async function startNoise(type){
   type = type || S.noiseType;
   if (type === 'off'){ stopNoise(); return; }
-  let url, fileRms;
+  let url;
   if (type[0] === 'c'){                 // custom 'c:<id>'
     const id = type.slice(2);
     const rec = await idbGet('noise', id);
     if (!rec) return;                   // file missing
-    url = customUrl(id, rec.blob);
-    fileRms = await measureCustomRms(id, rec.blob);
+    currentNoiseFileRms = await measureCustomRms(id, rec.blob);
+    url = VOLUME_SETTABLE ? customUrl(id, rec.blob)
+                          : await customBakedUrl(id, rec.blob, Math.max(0.0005, noiseTargetRms()));
   } else {
+    currentNoiseFileRms = bakedRms();
     url = makeNoiseUrl(type);
-    fileRms = NOISE_FILE_RMS;
   }
   if (S.noiseType !== type) return;      // user switched while we were awaiting
-  currentNoiseFileRms = fileRms || NOISE_FILE_RMS;
   const cur = noiseAudio.currentSrc || noiseAudio.src;
   if (cur !== url) noiseAudio.src = url;
-  applyNoiseVol();
+  setNoiseElementVolume();
   if (cur === url && !noiseAudio.paused) return;   // already playing the right thing
   try { const p = noiseAudio.play(); if (p && p.catch) p.catch(()=>{}); } catch(e){}
   // Re-assert the book as the lock-screen "now playing" item, in case starting a second
@@ -817,15 +862,19 @@ function applyRate(){
 async function play(){
   if (!tracks.length) return;
   wantPlaying = true;
+  // CRITICAL for lock-screen resume: on iOS, both seeking and changing playbackRate on a
+  // BACKGROUNDED element leave it advancing its clock but SILENT. So when we're resuming
+  // from the lock screen (document hidden) we do neither — just a clean play(). The rewind
+  // and speed are re-applied when the app comes back to the foreground (visibilitychange).
+  const foreground = document.visibilityState === 'visible';
   // Smart resume: if it's been >5s since she last listened, rewind 15s so she
   // catches the lead-up to where she stopped (clamped to the chapter start).
-  if (lastListenAt && Date.now() - lastListenAt > 5000){
+  if (foreground && lastListenAt && Date.now() - lastListenAt > 5000){
     audio.currentTime = Math.max(0, (audio.currentTime || 0) - 15);
   }
   // Start the book first and synchronously (helps the auto-advance survive on iOS).
   try { const p = audio.play(); if (p && p.catch) p.catch(()=>{}); } catch(e){}
-  applyRate();
-  setTimeout(applyRate, 150);   // iOS often resets the rate right after play starts
+  if (foreground){ applyRate(); setTimeout(applyRate, 150); }   // iOS resets rate after play
   // Then the background noise (its own looping element). Don't restart it if it's
   // already running (e.g. we came in mid track-swap).
   if (S.noiseType !== 'off' && noiseAudio.paused) startNoise(S.noiseType);
@@ -854,15 +903,22 @@ function prevTrack(){
 // ---------- audio element events ----------
 audio.addEventListener('play', () => {
   isPlaying = true; setPlayIcon(true); updateSession('playing');
-  applyRate();
+  if (document.visibilityState === 'visible') applyRate();   // never touch rate in background — it mutes on iOS
   // keep the noise following the book — including when playback auto-resumes (e.g. after
   // a device switch). Don't restart it mid track-swap; it's already covering the gap.
   if (S.noiseType !== 'off' && noiseAudio.paused) startNoise(S.noiseType);
 });
-audio.addEventListener('playing', applyRate);
+audio.addEventListener('playing', () => { if (document.visibilityState === 'visible') applyRate(); });
 audio.addEventListener('ratechange', () => {
-  // if something (iOS) reset the rate away from what she chose, restore it
+  // if something (iOS) reset the rate away from what she chose, restore it — but only in the
+  // foreground; re-asserting the rate on a backgrounded element silences it.
+  if (document.visibilityState !== 'visible') return;
   if (Math.abs(audio.playbackRate - S.speed) > 0.01) applyRate();
+});
+// When the app returns to the foreground, re-assert the chosen speed (we skipped it while
+// backgrounded so playback wouldn't go silent).
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && isPlaying) applyRate();
 });
 audio.addEventListener('pause', () => {
   isPlaying = false; setPlayIcon(false); updateSession('paused');
@@ -1255,6 +1311,7 @@ async function deleteNoise(id, name){
   await idbDel('noise', id);
   customRms.delete(id);
   if (customUrls.has(id)){ URL.revokeObjectURL(customUrls.get(id)); customUrls.delete(id); }
+  for (const k of [...customBaked.keys()]){ if (k.startsWith(id+':')){ URL.revokeObjectURL(customBaked.get(k)); customBaked.delete(k); } }
   if (S.noiseType === 'c:'+id){ S.noiseType = 'brown'; persist(); }
   await loadNoiseList();
   if (S.noiseType !== 'off' && isPlaying) startNoise(S.noiseType); else stopNoise();
@@ -1268,6 +1325,9 @@ noiseVol.addEventListener('input', () => {
   setP(noiseVol, S.noiseVol);
   applyNoiseVol();
 });
+// On release (and via the +/- taps, which also fire 'change'), re-bake the noise file to the
+// new level on platforms where .volume is ignored (iOS). Runs inside the gesture.
+noiseVol.addEventListener('change', refreshBakedNoise);
 
 // ---------- UI: book volume + speed ----------
 const bookVol = $('bookVol');
@@ -1297,7 +1357,8 @@ speedRange.addEventListener('input', () => {
 function stepSlider(el, amt){
   const min = +el.min || 0, max = +el.max || 100;
   el.value = Math.max(min, Math.min(max, (+el.value) + amt));
-  el.dispatchEvent(new Event('input', { bubbles:true }));   // reuse the slider's own handler
+  el.dispatchEvent(new Event('input', { bubbles:true }));    // reuse the slider's own handler
+  el.dispatchEvent(new Event('change', { bubbles:true }));   // commit (re-bakes iOS noise level in-gesture)
 }
 $('noiseM').onclick = () => stepSlider(noiseVol, -5);
 $('noiseP').onclick = () => stepSlider(noiseVol, 5);
