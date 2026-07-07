@@ -301,7 +301,6 @@
 </div>
 
 <audio id="audio" preload="auto"></audio>
-<audio id="audioB" preload="auto"></audio>
 
 <script>
 (() => {
@@ -356,11 +355,7 @@ function idbAll(store){ return tx(store,'readonly').then(s => new Promise((res,r
 function idbEntries(store){ return idb().then(db => new Promise((res,rej)=>{ const t=db.transaction(store,'readonly'), os=t.objectStore(store), vq=os.getAll(), kq=os.getAllKeys(); t.oncomplete=()=>res((kq.result||[]).map((k,i)=>({key:k, value:vq.result[i]}))); t.onerror=()=>rej(t.error); })); }
 
 // ---------- audio graph ----------
-// Two audio elements: `audio` is the one currently playing; `preloader` holds the NEXT
-// track fully loaded so the hand-off at a boundary is a single instant play() call
-// (loading at the boundary is what iOS drops when the screen is locked). They swap roles.
-let audio = $('audio');
-let preloader = $('audioB');
+const audio = $('audio');
 let ctx, noiseGain, noiseSrc, noiseConnected = false;
 let graphBuilt = false;
 
@@ -734,79 +729,30 @@ function cueTrack(i, time, autoplay){
   cueing = true;               // the <audio> 'pause' from this src swap must NOT stop the noise
   const startTime = active.time || 0;
   audio.src = tracks[i].url;
-  audio.playbackRate = S.speed;
+  applyRate();
   if (startTime > 0){
     // need to seek — wait for metadata, then position and (optionally) play
     audio.addEventListener('loadedmetadata', () => {
       audio.currentTime = startTime;
+      applyRate();
       cueing = false;
       if (autoplay) play();
     }, { once:true });
     audio.load();
   } else {
     // starting at 0 (auto-advance / chapter change): play immediately so iOS keeps the
-    // audio session alive across the boundary — deferring to loadedmetadata drops the
-    // hand-off when the screen is locked.
+    // audio session alive across the boundary.
     cueing = false;
     if (autoplay) play(); else audio.load();
   }
   setTimeout(() => { cueing = false; }, 5000);   // safety, in case metadata never loads
   renderList();
   updateNowPlaying();
-  preloadNext();
 }
 
-// Keep the spare element loaded with the next sequential track so the boundary is instant.
-function preloadNext(){
-  if (!active){ preloader.removeAttribute('src'); delete preloader.dataset.idx; return; }
-  const ni = active.index + 1;
-  if (ni < tracks.length){
-    if (preloader.dataset.idx !== String(ni)){
-      preloader.src = tracks[ni].url;
-      preloader.dataset.idx = String(ni);
-      preloader.playbackRate = S.speed;
-      preloader.load();
-    }
-  } else {
-    preloader.removeAttribute('src'); delete preloader.dataset.idx;
-  }
-}
-
-// Advance to the next track. If the preloader already has it ready, swap elements and
-// play instantly (the iOS-friendly fast path); otherwise fall back to a normal cue.
-function advanceToNext(){
-  if (!active) return;
-  const ni = active.index + 1;
-  if (ni >= tracks.length){ pause(); audio.currentTime = audio.duration || 0; return; }  // end of book
-  if (preloader.dataset.idx === String(ni) && preloader.readyState >= 1){
-    const old = audio;
-    audio = preloader; preloader = old;        // swap: the preloaded element becomes the player
-    try { old.pause(); } catch(e){}
-    audio.playbackRate = S.speed;
-    audio.volume = S.bookVol/100;
-    try { audio.preservesPitch = true; } catch(e){}
-    active.index = ni; active.time = 0; persistBook();
-    cueing = false;
-    try { const p = audio.play(); if (p && p.catch) p.catch(()=>{}); } catch(e){}   // instant
-    renderList(); updateNowPlaying(); updateBookBar();
-    preloadNext();                              // warm the following track into the now-free element
-  } else {
-    cueTrack(ni, 0, true);                      // preloader not ready — normal cue
-  }
-}
-
-// iOS requires each media element to be "unlocked" by a user gesture before it can be
-// played programmatically. Prime the spare element on the first play tap so the
-// background hand-off is allowed later.
-let audioUnlocked = false;
-function unlockPreloader(){
-  if (audioUnlocked) return;
-  audioUnlocked = true;
-  if (!preloader.src) return;
-  preloader.muted = true;
-  const p = preloader.play();
-  const settle = () => { try { preloader.pause(); preloader.currentTime = 0; } catch(e){} preloader.muted = false; };
-  if (p && p.then) p.then(settle).catch(() => { preloader.muted = false; }); else settle();
+// Re-assert the chosen speed — iOS Safari resets playbackRate to 1 on play/load.
+function applyRate(){
+  try { audio.playbackRate = S.speed; audio.preservesPitch = true; } catch(e){}
 }
 
 async function play(){
@@ -817,10 +763,10 @@ async function play(){
   if (lastListenAt && Date.now() - lastListenAt > 5000){
     audio.currentTime = Math.max(0, (audio.currentTime || 0) - 15);
   }
-  // Start the book FIRST and synchronously. At a track boundary (auto-advance) this
-  // must run before iOS freezes the backgrounded page, so it can't wait on the
-  // noise-engine setup or the next track's metadata.
+  // Start the book first and synchronously (helps the auto-advance survive on iOS).
   try { const p = audio.play(); if (p && p.catch) p.catch(()=>{}); } catch(e){}
+  applyRate();
+  setTimeout(applyRate, 150);   // iOS often resets the rate right after play starts
   // Then bring up the background-noise engine (independent of the book).
   buildGraph();
   if (ctx.state !== 'running'){ try { await ctx.resume(); } catch(e){} }
@@ -835,11 +781,11 @@ async function pause(){
   if (ctx && ctx.state === 'running') await ctx.suspend();
 }
 
-function togglePlay(){ unlockPreloader(); isPlaying ? pause() : play(); }
+function togglePlay(){ isPlaying ? pause() : play(); }
 
 function nextTrack(){
   if (!active) return;
-  if (active.index < tracks.length-1) advanceToNext();
+  if (active.index < tracks.length-1) cueTrack(active.index+1, 0, true);
   else { pause(); audio.currentTime = audio.duration||0; } // end of book
 }
 function prevTrack(){
@@ -849,45 +795,43 @@ function prevTrack(){
 }
 
 // ---------- audio element events ----------
-// Bound to BOTH elements; each handler ignores events from the non-active (preloading) one.
-function bindAudio(el){
-  el.addEventListener('play', ev => {
-    if (ev.currentTarget !== audio) return;
-    isPlaying = true; setPlayIcon(true); updateSession('playing');
-    // keep the background noise following the book — including if playback auto-resumed
-    if (ctx && ctx.state === 'suspended') ctx.resume();
-    if (graphBuilt && !noiseConnected && S.noiseType !== 'off') startNoise(S.noiseType);
-  });
-  el.addEventListener('pause', ev => {
-    if (ev.currentTarget !== audio) return;
-    isPlaying = false; setPlayIcon(false); updateSession('paused');
-    // If something OUTSIDE the app paused the book (another app grabbing audio focus),
-    // stop the noise too — unless we're mid track-swap, where the noise covers the gap.
-    if (!cueing && ctx && ctx.state === 'running') ctx.suspend();
-  });
-  el.addEventListener('ended', ev => { if (ev.currentTarget === audio) nextTrack(); });
-  el.addEventListener('timeupdate', ev => {
-    if (ev.currentTarget !== audio) return;
-    if (!seeking){
-      const d = audio.duration||0;
-      const pct = d ? audio.currentTime/d*100 : 0;
-      $('seek').value = pct * 10;
-      setP($('seek'), pct);
-      $('tCur').textContent = fmt(audio.currentTime);
-    }
-    // remember where we are in this book (throttled write inside saveProgress)
-    if (!audio.paused){
-      lastListenAt = Date.now();
-      if (active) active.lastListenedAt = lastListenAt;
-      saveProgress();
-    }
-    updateBookBar();
-    updateSessionPosition();
-  });
-  el.addEventListener('durationchange', ev => { if (ev.currentTarget === audio) $('tDur').textContent = fmt(audio.duration); });
-}
-bindAudio(audio);
-bindAudio(preloader);
+audio.addEventListener('play', () => {
+  isPlaying = true; setPlayIcon(true); updateSession('playing');
+  applyRate();
+  // keep the background noise following the book — including if playback auto-resumed
+  if (ctx && ctx.state === 'suspended') ctx.resume();
+  if (graphBuilt && !noiseConnected && S.noiseType !== 'off') startNoise(S.noiseType);
+});
+audio.addEventListener('playing', applyRate);
+audio.addEventListener('ratechange', () => {
+  // if something (iOS) reset the rate away from what she chose, restore it
+  if (Math.abs(audio.playbackRate - S.speed) > 0.01) applyRate();
+});
+audio.addEventListener('pause', () => {
+  isPlaying = false; setPlayIcon(false); updateSession('paused');
+  // If something OUTSIDE the app paused the book (another app grabbing audio focus),
+  // stop the noise too — unless we're mid track-swap, where the noise covers the gap.
+  if (!cueing && ctx && ctx.state === 'running') ctx.suspend();
+});
+audio.addEventListener('ended', () => nextTrack());
+audio.addEventListener('timeupdate', () => {
+  if (!seeking){
+    const d = audio.duration||0;
+    const pct = d ? audio.currentTime/d*100 : 0;
+    $('seek').value = pct * 10;
+    setP($('seek'), pct);
+    $('tCur').textContent = fmt(audio.currentTime);
+  }
+  // remember where we are in this book (throttled write inside saveProgress)
+  if (!audio.paused){
+    lastListenAt = Date.now();
+    if (active) active.lastListenedAt = lastListenAt;
+    saveProgress();
+  }
+  updateBookBar();
+  updateSessionPosition();
+});
+audio.addEventListener('durationchange', () => { $('tDur').textContent = fmt(audio.duration); });
 
 function updateNowPlaying(){
   const t = active ? tracks[active.index] : null;
@@ -1136,10 +1080,18 @@ async function importData(file){
   if (!confirm('Import this backup? Books and progress from the file will be added to (and overwrite matching) what’s on this device.')) return;
   setBackupStatus('Importing…');
   try {
+    if (file.size < 8) throw new Error('the file is empty or too small.');
     const len = new DataView(await file.slice(0,4).arrayBuffer()).getUint32(0, false);
-    const dump = JSON.parse(await file.slice(4, 4+len).text());
+    if (len <= 0 || len + 4 > file.size){
+      throw new Error('the file header is invalid — it was likely altered in transfer. Send the backup by AirDrop or a direct file copy rather than email/messaging, which can corrupt it.');
+    }
+    let dump;
+    try { dump = JSON.parse(await file.slice(4, 4+len).text()); }
+    catch(e){ throw new Error('the backup contents could not be read — the file was probably corrupted in transfer. Try AirDrop or a direct copy.'); }
+    if (!dump || !dump.stores) throw new Error('this doesn’t look like a Steady backup file.');
     const offsets = []; let off = 4 + len;
     (dump.blobs||[]).forEach(b => { offsets.push(off); off += b.size; });
+    if (off > file.size) throw new Error('the backup is incomplete (some audio is missing) — the file may have been truncated during download or transfer.');
     const getBlob = i => file.slice(offsets[i], offsets[i] + dump.blobs[i].size, dump.blobs[i].type);
     for (const store of BACKUP_STORES){
       for (const e of (dump.stores[store] || [])){
@@ -1150,8 +1102,8 @@ async function importData(file){
     setBackupStatus('Imported — reloading…');
     setTimeout(() => location.reload(), 600);
   } catch(err){
-    setBackupStatus('');
-    alert('Sorry, that file could not be imported — it may not be a Steady backup.');
+    setBackupStatus('Import failed');
+    alert('Import failed: ' + (err && err.message ? err.message : err));
   }
 }
 $('exportBtn').onclick = exportData;
