@@ -1,6 +1,6 @@
 // Steady service worker — offline support.
 // Bump CACHE whenever the asset list changes to force a clean update.
-const CACHE = 'steady-v11';
+const CACHE = 'steady-v12';
 const ASSETS = [
   './',
   './index.html',

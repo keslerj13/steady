@@ -253,13 +253,14 @@
   <div class="card">
     <div class="cardhead"><h2>Audiobook</h2><button class="info-btn" type="button" aria-label="About audiobook settings" aria-expanded="false">i</button></div>
     <div class="info" hidden>Volume and speed apply to the book only — the background noise has its own level above. Drag the speed slider from 0.5× to 3×; it snaps to set steps.</div>
-    <div class="row">
+    <div class="row" id="bookVolRow">
       <label>Book volume</label>
       <button class="nudge" id="bookM" type="button" aria-label="Lower book volume">−</button>
       <input type="range" id="bookVol" min="0" max="100" value="100" />
       <button class="nudge" id="bookP" type="button" aria-label="Raise book volume">+</button>
       <span class="val" id="bookVolVal">100%</span>
     </div>
+    <div class="info" id="bookVolNote" hidden>On iPhone the book always plays at your phone's volume (iOS doesn't allow apps to set it) — use the phone's side buttons for overall loudness, and the <b>background noise level</b> above to sit the noise under the book.</div>
     <div class="row">
       <label>Speed</label>
       <button class="nudge" id="speedM" type="button" aria-label="Slower">−</button>
@@ -325,7 +326,7 @@ const setP = (el, pct) => el.style.setProperty('--p', Math.max(0, Math.min(100, 
 const LS = 'steady.state.v2';
 // Bump this on every deploy (keep it in sync with CACHE in sw.js) so the version shown
 // at the bottom of the page reflects what's actually live.
-const APP_VERSION = 'v11';
+const APP_VERSION = 'v12';
 const defaults = { noiseType:'brown', noiseVol:35, bookVol:100, speed:1, activeId:null };
 let S = Object.assign({}, defaults, JSON.parse(localStorage.getItem(LS) || '{}'));
 let saveTimer = null;
@@ -389,15 +390,14 @@ const NOISE_SR = 44100;               // sample rate of generated noise files
 const NOISE_SECS = 20;                // loop length; long enough that seams are rare
 const NOISE_FILE_RMS = 0.20;          // baked file level when .volume does the attenuation
 
-// iOS/iPadOS ignore HTMLMediaElement.volume entirely — it's effectively read-only at 1, so
-// we can't turn the noise down with .volume there. Detect it once: where .volume works
-// (Android/desktop) we bake the file at a fixed level and scale with .volume; where it
-// doesn't (iOS) we BAKE THE CHOSEN LEVEL straight into the generated file and regenerate
-// it when the slider moves. Either way the level slider actually does something.
-const VOLUME_SETTABLE = (() => {
-  try { noiseAudio.volume = 0.3; const ok = Math.abs(noiseAudio.volume - 0.3) < 0.05; noiseAudio.volume = 1; return ok; }
-  catch(e){ return false; }
-})();
+// iOS/iPadOS silently ignore HTMLMediaElement.volume — you can set it and read the value
+// back (so a feature-test wrongly "passes"), but it never changes the actual output. So we
+// detect the platform directly. Where .volume works (Android/desktop) we bake the file at a
+// fixed level and scale with .volume; on iOS we BAKE THE CHOSEN LEVEL straight into the
+// generated file and regenerate it when the slider moves. Either way the slider does something.
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.platform) ||
+  (/Mac/.test(navigator.platform) && navigator.maxTouchPoints > 1);   // iPadOS reports as "MacIntel"
+const VOLUME_SETTABLE = !IS_IOS;
 
 // Build NOISE_SECS of the requested colour at a target RMS, then crossfade the tail into
 // the head so the loop point is continuous — no click and, crucially, no gap of silence
@@ -1505,9 +1505,12 @@ async function cleanOrphanTracks(){
 function initUI(){
   noiseVol.value = S.noiseVol; $('noiseVolVal').textContent = S.noiseVol+'%'; setP(noiseVol, S.noiseVol);
   bookVol.value = S.bookVol; $('bookVolVal').textContent = S.bookVol+'%'; setP(bookVol, S.bookVol);
-  audio.volume = S.bookVol/100;
+  audio.volume = S.bookVol/100;   // ignored on iOS (see bookVolNote), honored elsewhere
   audio.preservesPitch = true;   // keep voices natural when sped up
   audio.playbackRate = S.speed;
+  // iOS can't set a media element's volume, so a book-volume slider there is a dead control —
+  // hide it and explain. (The noise level still works because we bake it into the file.)
+  if (IS_IOS){ $('bookVolRow').hidden = true; $('bookVolNote').hidden = false; }
   renderNoiseTypes(); paintSpeed(); setPlayIcon(false);
   $('appVersion').textContent = 'Steady ' + APP_VERSION;
 }
