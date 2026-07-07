@@ -1093,9 +1093,16 @@ async function importData(file){
     (dump.blobs||[]).forEach(b => { offsets.push(off); off += b.size; });
     if (off > file.size) throw new Error('the backup is incomplete (some audio is missing) — the file may have been truncated during download or transfer.');
     const getBlob = i => file.slice(offsets[i], offsets[i] + dump.blobs[i].size, dump.blobs[i].type);
-    for (const store of BACKUP_STORES){
+    // Write 'meta' LAST so a book never appears in the Bookshelf until its audio is fully
+    // stored — if the import is interrupted, you get missing books, never broken ones.
+    const IMPORT_ORDER = ['tracks','covers','noise','meta'];
+    let total = 0; for (const s of IMPORT_ORDER) total += (dump.stores[s]||[]).length;
+    let done = 0;
+    for (const store of IMPORT_ORDER){
       for (const e of (dump.stores[store] || [])){
         await idbPut(store, e.k, restoreBlobs(e.v, getBlob));
+        done++;
+        setBackupStatus(`Importing… ${total ? Math.round(done/total*100) : 100}% (large books take a few minutes — don't close the app)`);
       }
     }
     if (dump.ls && dump.ls[LS] != null) localStorage.setItem(LS, dump.ls[LS]);
