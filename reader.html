@@ -500,7 +500,11 @@ function ensurePdfjs(){
   });
   return pdfjsReady;
 }
-async function loadPdfDoc(blob){ const lib = await ensurePdfjs(); return lib.getDocument({ data: await blob.arrayBuffer() }).promise; }
+async function loadPdfDoc(src){
+  const lib = await ensurePdfjs();
+  const buf = (src instanceof ArrayBuffer) ? src : await src.arrayBuffer();
+  return lib.getDocument({ data: buf.slice(0) }).promise;   // copy — pdf.js can detach the buffer it's given
+}
 async function pdfPageToCanvas(doc, n, scale){
   const page = await doc.getPage(n), vp = page.getViewport({ scale });
   const cv = document.createElement('canvas'); cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
@@ -556,8 +560,8 @@ async function pdfExtractReflow(doc){
   if (!chapters.length) chapters.push({ label: '', parts: ['(No readable text found in this PDF.)'] });
   return chapters.map(c => ({ label: c.label, html: (c.label ? `<h2>${esc(c.label)}</h2>` : '') + c.parts.map(t => `<p>${esc(t)}</p>`).join('') }));
 }
-async function openPdfBook(rec){
-  const doc = await loadPdfDoc(rec.epub);
+async function openPdfBook(rec, fileBuf){
+  const doc = await loadPdfDoc(fileBuf);
   const textual = rec.pdfMode === 'reflow' ? true : await pdfLooksTextual(doc);
   if (!textual){
     alert('This PDF looks like scanned images (no text layer to reflow). A page-image view for scanned PDFs is coming soon.');
@@ -609,7 +613,7 @@ async function showCover(){
   $('bookTitle').textContent = book.title;
   const img = $('coverImg'), fb = $('coverFallback');
   let url = null;
-  if (currentRec && currentRec.cover) url = makeUrlBlob(currentRec.cover);            // custom cover wins
+  if (currentRec && currentRec.hasCover) url = await coverUrlFor(currentRec);          // saved cover wins
   else if (book.coverHref){ const b = await book.zip.bytes(book.coverHref); if (b) url = makeUrl(b, guessType(book.coverHref)); }
   if (url){ img.src = url; img.removeAttribute('data-empty'); fb.classList.add('hidden'); }
   else {
@@ -626,11 +630,15 @@ async function showCover(){
 const DB_NAME = 'steady-reader-db', STORE = 'books';
 function idb(){
   return new Promise((res, rej) => {
-    const r = indexedDB.open(DB_NAME, 2);
+    const r = indexedDB.open(DB_NAME, 3);
     r.onupgradeneeded = e => {
       const d = e.target.result;
       if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE, { keyPath: 'id' });
       if (!d.objectStoreNames.contains('ambient')) d.createObjectStore('ambient');   // one saved ambient track
+      // Heavy data (book file + cover) lives here as ArrayBuffers, keyed by book id. Kept OUT of the
+      // metadata record so shelf/position updates never rewrite it — Blobs read back out of IndexedDB
+      // and re-stored can come back broken on iOS, which was wiping covers (and risking the file).
+      if (!d.objectStoreNames.contains('blobs')) d.createObjectStore('blobs');
     };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
@@ -642,6 +650,41 @@ function dbAll(){ return idb().then(d => new Promise((res, rej) => { const q = d
 function dbGet(id){ return idb().then(d => new Promise((res, rej) => { const q = d.transaction(STORE, 'readonly').objectStore(STORE).get(id); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); })); }
 function dbPut(rec){ return idb().then(d => new Promise((res, rej) => { const t = d.transaction(STORE, 'readwrite'); t.objectStore(STORE).put(rec); t.oncomplete = () => res(); t.onerror = () => rej(t.error); })); }
 function dbDel(id){ return idb().then(d => new Promise((res, rej) => { const t = d.transaction(STORE, 'readwrite'); t.objectStore(STORE).delete(id); t.oncomplete = () => res(); t.onerror = () => rej(t.error); })); }
+function blobsGet(id){ return idb().then(d => new Promise((res, rej) => { const q = d.transaction('blobs', 'readonly').objectStore('blobs').get(id); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); })); }
+function blobsPut(id, rec){ return idb().then(d => new Promise((res, rej) => { const t = d.transaction('blobs', 'readwrite'); t.objectStore('blobs').put(rec, id); t.oncomplete = () => res(); t.onerror = () => rej(t.error); })); }
+function blobsDel(id){ return idb().then(d => new Promise((res, rej) => { const t = d.transaction('blobs', 'readwrite'); t.objectStore('blobs').delete(id); t.oncomplete = () => res(); t.onerror = () => rej(t.error); })); }
+
+// Cover object-URLs, cached per book so re-renders don't re-read the DB (and don't get revoked mid-render).
+const coverUrls = new Map();
+async function coverUrlFor(rec){
+  if (!rec || !rec.hasCover) return null;
+  if (coverUrls.has(rec.id)) return coverUrls.get(rec.id);
+  try {
+    const b = await blobsGet(rec.id);
+    if (!b || !b.cover || !b.cover.byteLength) return null;
+    const url = URL.createObjectURL(new Blob([b.cover], { type: b.coverType || 'image/jpeg' }));
+    coverUrls.set(rec.id, url);
+    return url;
+  } catch(e){ return null; }
+}
+function dropCoverUrl(id){ const u = coverUrls.get(id); if (u) URL.revokeObjectURL(u); coverUrls.delete(id); }
+
+// One-time upgrade: move blobs out of old records into the 'blobs' store as ArrayBuffers.
+async function migrateBlobs(){
+  try {
+    for (const rec of await dbAll()){
+      if (!rec.epub && !rec.cover) continue;
+      try {
+        const file = rec.epub ? await rec.epub.arrayBuffer() : null;
+        const cover = rec.cover ? await rec.cover.arrayBuffer() : null;
+        await blobsPut(rec.id, { file, fileType: (rec.epub && rec.epub.type) || '', cover, coverType: (rec.cover && rec.cover.type) || 'image/jpeg' });
+        rec.hasCover = !!(cover && cover.byteLength);
+        delete rec.epub; delete rec.cover;
+        await dbPut(rec);
+      } catch(e){}   // a already-broken blob → record survives, just shows the colour cover
+    }
+  } catch(e){}
+}
 
 const genId = () => 'b' + Date.now().toString(36) + Math.round(Math.random() * 1e9).toString(36);
 const COVER_COLORS = ['#4a5d6b','#6b4a52','#4a6b57','#6b5f3a','#513a6b','#3a5b6b','#6b4a3a','#455a45','#734a4a','#3a4a6b'];
@@ -649,38 +692,42 @@ function coverColor(t){ let h = 0; for (const c of (t || 'x')) h = (h * 31 + c.c
 
 async function addBookFromFile(file){
   try {
+    const id = genId();
+    const fileBuf = await file.arrayBuffer();     // stored as an ArrayBuffer — survives IndexedDB round-trips
+    let title, author = '', format = 'epub', coverBuf = null, coverType = 'image/jpeg';
     if (isPdf(file)){
-      const doc = await loadPdfDoc(file);
+      format = 'pdf';
+      const doc = await loadPdfDoc(fileBuf);
       const meta = await doc.getMetadata().catch(() => null);
-      const title = (meta && meta.info && meta.info.Title) || file.name.replace(/\.pdf$/i, '');
-      const author = (meta && meta.info && meta.info.Author) || '';
-      const cover = await pdfCoverBlob(doc);
-      await dbPut({ id: genId(), title, author, epub: file, format: 'pdf',
-        cover, color: coverColor(title), shelf: 'tbr', addedAt: Date.now(), pos: null });
-      await renderLibrary();
-      return;
+      title = (meta && meta.info && meta.info.Title) || file.name.replace(/\.pdf$/i, '');
+      author = (meta && meta.info && meta.info.Author) || '';
+      const cb = await pdfCoverBlob(doc);
+      if (cb){ coverBuf = await cb.arrayBuffer(); coverType = cb.type || 'image/jpeg'; }
+    } else {
+      const parsed = await parseEpub(fileBuf);
+      title = parsed.title; author = parsed.author;
+      const cb = await coverBlobOf(parsed);
+      if (cb){ coverBuf = await cb.arrayBuffer(); coverType = cb.type || 'image/jpeg'; }
     }
-    const parsed = await parseEpub(await file.arrayBuffer());
-    const cover = await coverBlobOf(parsed);
-    await dbPut({ id: genId(), title: parsed.title, author: parsed.author, epub: file,
-      cover, color: coverColor(parsed.title), shelf: 'tbr', addedAt: Date.now(), pos: null });
+    await blobsPut(id, { file: fileBuf, fileType: file.type || '', cover: coverBuf, coverType });
+    await dbPut({ id, title, author, format, hasCover: !!(coverBuf && coverBuf.byteLength),
+      color: coverColor(title), shelf: 'tbr', addedAt: Date.now(), pos: null });
     await renderLibrary();
   } catch(err){ alert('Couldn’t add that book: ' + (err.message || err)); }
 }
 
-let libUrls = [];
 async function renderLibrary(){
-  const prevUrls = libUrls; libUrls = [];   // revoke OLD urls only after the new DOM exists (revoking first blanked covers)
   const books = (await dbAll()).sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
+  const urls = new Map();
+  for (const b of books) urls.set(b.id, await coverUrlFor(b));
   for (const shelf of ['reading', 'tbr', 'finished']){
     const box = document.querySelector('.shelf[data-shelf="' + shelf + '"] .shelfBooks');
     box.innerHTML = '';
     const list = books.filter(b => b.shelf === shelf);
     if (!list.length){ const e = document.createElement('div'); e.className = 'shelfEmpty'; e.textContent = 'Empty'; box.appendChild(e); }
-    else list.forEach(b => box.appendChild(bookCoverEl(b)));
+    else list.forEach(b => box.appendChild(bookCoverEl(b, urls.get(b.id))));
   }
   $('libHint').classList.toggle('hidden', books.length > 0);
-  prevUrls.forEach(u => URL.revokeObjectURL(u));
 }
 function paintColorCover(art, rec){
   art.innerHTML = '';
@@ -688,14 +735,13 @@ function paintColorCover(art, rec){
   const t = document.createElement('span'); t.className = 'coverText'; t.textContent = rec.title || '';
   art.appendChild(t);
 }
-function bookCoverEl(rec){
+function bookCoverEl(rec, coverUrl){
   const el = document.createElement('div'); el.className = 'libBook'; el.dataset.id = rec.id;
   const art = document.createElement('div'); art.className = 'cover';
-  if (rec.cover){
+  if (coverUrl){
     const img = document.createElement('img');
-    const u = URL.createObjectURL(rec.cover); libUrls.push(u);
-    img.src = u; img.alt = '';
-    img.onerror = () => paintColorCover(art, rec);   // unreadable blob → colour cover instead of a blank
+    img.src = coverUrl; img.alt = '';
+    img.onerror = () => paintColorCover(art, rec);   // unreadable image → colour cover instead of a blank
     art.appendChild(img);
   } else paintColorCover(art, rec);
   const cap = document.createElement('div'); cap.className = 'libCap'; cap.textContent = rec.title;
@@ -711,16 +757,23 @@ function bookCoverEl(rec){
   prog.append(bar, num);
   const menu = document.createElement('button'); menu.className = 'libMenu'; menu.textContent = '⋯'; menu.setAttribute('aria-label', 'Book options');
   menu.onclick = e => { e.stopPropagation(); openBookMenu(rec); };
-  el.onclick = () => openBookById(rec.id);   // plain tap to open — no gesture juggling
+  el.setAttribute('role', 'button');          // iOS delivers taps reliably to button-ish elements
   el.append(art, cap, prog, menu);
   return el;
 }
 
 async function openBookById(id){
+  try { await openBookByIdInner(id); }
+  catch(err){ alert('Couldn’t open that book: ' + (err && err.message || err)); }
+}
+async function openBookByIdInner(id){
   const rec = await dbGet(id); if (!rec) return;
   currentBookId = id; currentRec = rec;
-  if (rec.format === 'pdf'){ await openPdfBook(rec); return; }
-  const parsed = await parseEpub(await rec.epub.arrayBuffer());
+  const b = await blobsGet(id);
+  const fileBuf = b && b.file;
+  if (!fileBuf || !fileBuf.byteLength) throw new Error('the saved file for this book is missing. Remove it and add it again.');
+  if (rec.format === 'pdf'){ await openPdfBook(rec, fileBuf); return; }
+  const parsed = await parseEpub(fileBuf);
   await openParsed(parsed);
 }
 
@@ -1268,6 +1321,13 @@ $('epubFile').addEventListener('change', e => { const f = e.target.files[0]; e.t
 $('startReading').onclick = openReader;
 $('btnHome').onclick = backToLibrary;
 $('coverBack').onclick = backToLibrary;
+// Tap a book to open it — delegated on the container (survives re-renders; more reliable on iOS
+// than a click handler on each <div>). The ⋯ button handles itself.
+$('library').addEventListener('click', e => {
+  if (e.target.closest('.libMenu')) return;
+  const el = e.target.closest('.libBook');
+  if (el && el.dataset.id) openBookById(el.dataset.id);
+});
 document.querySelectorAll('#bookMenu .bmShelves .btn').forEach(b => b.onclick = async () => {
   if (!menuBookId) return;
   await moveBookToShelf(menuBookId, b.dataset.shelf);
@@ -1277,13 +1337,18 @@ $('bmCover').onclick = () => $('coverFile').click();
 $('coverFile').addEventListener('change', async e => {
   const f = e.target.files[0]; e.target.value = '';
   if (!f || !menuBookId) return;
-  const rec = await dbGet(menuBookId); if (rec){ rec.cover = f; await dbPut(rec); if (currentRec && currentRec.id === rec.id) currentRec = rec; }
+  const id = menuBookId;
+  const b = (await blobsGet(id)) || {};
+  b.cover = await f.arrayBuffer(); b.coverType = f.type || 'image/jpeg';
+  await blobsPut(id, b);
+  const rec = await dbGet(id); if (rec){ rec.hasCover = true; await dbPut(rec); if (currentRec && currentRec.id === id) currentRec = rec; }
+  dropCoverUrl(id);
   $('bookMenu').classList.add('hidden'); renderLibrary();
 });
 $('bmRemove').onclick = async () => {
   if (!menuBookId) return;
   if (!confirm('Remove this book from your library?')) return;
-  await dbDel(menuBookId);
+  await dbDel(menuBookId); await blobsDel(menuBookId); dropCoverUrl(menuBookId);
   if (currentBookId === menuBookId){ currentBookId = null; currentRec = null; }
   $('bookMenu').classList.add('hidden'); renderLibrary();
 };
@@ -1328,8 +1393,8 @@ sc.addEventListener('scroll', () => { if (!$('excerptBtn').classList.contains('h
 
 $('ambFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) addAmbient(f); });
 
-// start on the library home; load any saved ambient track
-renderLibrary();
+// start on the library home; upgrade any old records first, then load any saved ambient track
+migrateBlobs().then(renderLibrary);
 loadAmbient();
 
 // part of the installed Steady PWA — register the shared service worker for offline
