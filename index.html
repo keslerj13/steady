@@ -345,7 +345,7 @@ const setP = (el, pct) => el.style.setProperty('--p', Math.max(0, Math.min(100, 
 const LS = 'steady.state.v2';
 // Bump this on every deploy (keep it in sync with CACHE in sw.js) so the version shown
 // at the bottom of the page reflects what's actually live.
-const APP_VERSION = 'v19';
+const APP_VERSION = 'v20';
 const defaults = { noiseType:'brown', noiseVol:35, bookVol:100, speed:1, activeId:null };
 let S = Object.assign({}, defaults, JSON.parse(localStorage.getItem(LS) || '{}'));
 let saveTimer = null;

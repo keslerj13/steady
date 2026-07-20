@@ -22,6 +22,9 @@
   :root[data-theme="dark"]{  --paper:#1c1b18; --ink:#cbc3b4; --ink-dim:#8a8272; --chrome:#26241f; --line:#3a372f; }
   *{box-sizing:border-box;}
   html,body{margin:0;height:100%;}
+  /* iOS: height:100% doesn't reliably equal the visible screen on a notched phone, which left a
+     strip of background under the footer. dvh tracks the real visible viewport. */
+  @supports (height:100dvh){ html,body{height:100dvh;} }
   body{background:var(--paper); color:var(--ink);
     font:16px/1.6 -apple-system,BlinkMacSystemFont,system-ui,sans-serif;
     -webkit-text-size-adjust:100%; overflow:hidden;}
@@ -45,7 +48,9 @@
   #coverMeta .btn{margin-top:20px;}
 
   /* ---------- reader shell ---------- */
-  #reader{height:100%; display:flex; flex-direction:column; max-width:640px; margin:0 auto;}
+  /* Pinned to the viewport rather than sized by height:100% — a fixed box is measured against the
+     real screen edges, so the footer always lands flush at the bottom on iOS. */
+  #reader{position:fixed; inset:0; display:flex; flex-direction:column; max-width:640px; margin:0 auto;}
   #topbar,#botbar{flex:0 0 auto; background:var(--chrome); display:flex; align-items:center; gap:8px; padding:8px 12px;}
   #topbar{border-bottom:1px solid var(--line); padding-top:calc(8px + env(safe-area-inset-top));}
   #botbar{border-top:1px solid var(--line); padding-bottom:calc(8px + env(safe-area-inset-bottom));}
