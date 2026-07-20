@@ -46,7 +46,10 @@ continuous background noise on the *same* play/pause button.
 
 ## Files to host
 Upload these to the host (the whole set):
-- `index.html` — the app
+- `index.html` — the audiobook app (home)
+- `reader.html` — the EPUB/PDF reader
+- `dashboard.html` — the stats dashboard
+- `pdf.min.js`, `pdf.worker.min.js` — pdf.js, for reading PDFs (loaded only when a PDF is opened)
 - `manifest.webmanifest` — makes it installable
 - `sw.js` — service worker for offline support
 - `icon-192.png`, `icon-512.png`, `icon-maskable-512.png` — app icons
