@@ -70,7 +70,8 @@
   /* paged (swipe-to-flip) mode: lay the same flow into viewport-wide columns and slide */
   #scroller.paged{overflow:hidden; touch-action:none;}
   #content.paged{max-width:none; margin:0; padding:28px 0; column-fill:auto; -webkit-column-fill:auto;
-    height:100%; will-change:transform;}   /* text stays selectable (for excerpts) */
+    height:100%; will-change:transform; orphans:1; widows:1;}   /* orphans/widows 1 = fill the page instead of
+                                                                   pushing whole paragraphs to the next one */
   #content.paged img{max-height:74vh; width:auto; margin:.6em auto;}
   /* subtle tap zones only in paged mode */
   .tapzone{position:absolute; top:0; bottom:0; width:15%; z-index:2; display:none;}
@@ -898,12 +899,23 @@ function applyPagedStyles(){
   // Inset by M; one page = one viewport width W, containing N columns; step is always W.
   ct.style.width = areaW + 'px'; ct.style.marginLeft = M + 'px'; ct.style.height = H + 'px';
   ct.style.columnWidth = colW + 'px'; ct.style.columnGap = (2 * M) + 'px';
+  // Fit a whole number of lines and split the leftover evenly top/bottom, so a page never ends
+  // with a big ragged gap under the last line.
+  const cs = getComputedStyle(ct);
+  const fs = parseFloat(cs.fontSize) || 19;
+  let lh = parseFloat(cs.lineHeight); if (!lh || isNaN(lh)) lh = fs * 1.6;
+  const base = 20;                                   // minimum breathing room top/bottom
+  const avail = Math.max(lh, H - base * 2);
+  const extra = avail - Math.floor(avail / lh) * lh; // leftover after whole lines
+  ct.style.paddingTop = (base + Math.floor(extra / 2)) + 'px';
+  ct.style.paddingBottom = (base + Math.ceil(extra / 2)) + 'px';
   return W;   // page step
 }
 function clearPagedStyles(){
   const ct = $('content');
   ct.style.transform = ''; ct.style.transition = '';
   ct.style.height = ''; ct.style.columnWidth = ''; ct.style.columnGap = ''; ct.style.width = ''; ct.style.marginLeft = '';
+  ct.style.paddingTop = ''; ct.style.paddingBottom = '';
 }
 
 /* ---- measure BOTH layouts once to build the shared page model ---- */
