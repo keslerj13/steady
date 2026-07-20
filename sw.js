@@ -1,9 +1,13 @@
 // Steady service worker — offline support.
 // Bump CACHE whenever the asset list changes to force a clean update.
-const CACHE = 'steady-v12';
+const CACHE = 'steady-v17';
 const ASSETS = [
   './',
   './index.html',
+  './reader.html',
+  './dashboard.html',
+  './pdf.min.js',
+  './pdf.worker.min.js',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',
