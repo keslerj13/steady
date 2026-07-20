@@ -147,7 +147,7 @@
   .shelf h2{font:600 12px/1 -apple-system,system-ui,sans-serif; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-dim); margin:4px 2px 12px;}
   .shelfBooks{display:flex; gap:16px; flex-wrap:wrap; min-height:150px;}
   .shelfEmpty{color:var(--ink-dim); opacity:.5; font-size:13px; padding:52px 2px;}
-  .libBook{width:96px; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; position:relative; touch-action:pan-y;}
+  .libBook{width:96px; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; position:relative;}
   .libBook .cover{width:96px; height:144px; border-radius:5px; overflow:hidden; box-shadow:0 3px 10px rgba(0,0,0,.25);
     background:#59504a; display:flex; align-items:center; justify-content:center; position:relative;}
   .libBook .cover img{width:100%; height:100%; object-fit:cover; display:block;}
@@ -171,6 +171,10 @@
   #bookMenu{position:fixed; inset:0; z-index:29; background:rgba(15,12,8,.5); display:flex; align-items:flex-end;}
   #bookMenu .bmPanel{width:100%; background:var(--chrome); border-radius:16px 16px 0 0; padding:16px 16px calc(16px + env(safe-area-inset-bottom)); display:flex; flex-direction:column; gap:10px;}
   #bookMenu .bmTitle{font:600 15px Georgia,serif; color:var(--ink); text-align:center; margin-bottom:4px;}
+  #bookMenu .bmLabel{font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-dim); text-align:center; margin-top:2px;}
+  #bookMenu .bmShelves{display:flex; gap:8px;}
+  #bookMenu .bmShelves .btn{flex:1; padding:11px 6px; font-size:14px;}
+  #bookMenu .bmShelves .btn.on{background:var(--accent); border-color:var(--accent); color:#06231f; font-weight:600;}
   #bookMenu .btn{width:100%; text-align:center;}
 
   /* nav menu */
@@ -209,7 +213,7 @@
     </div>
     <input id="epubFile" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" hidden>
   </div>
-  <div id="libHint" class="hidden">Add an EPUB to begin. Tap a cover to read; press &amp; hold a cover to drag it onto a shelf.</div>
+  <div id="libHint" class="hidden">Add an EPUB or PDF to begin. Tap a cover to read; tap <b>⋯</b> to move it between shelves.</div>
   <div class="shelf" data-shelf="reading"><h2>Reading</h2><div class="shelfBooks"></div></div>
   <div class="shelf" data-shelf="tbr"><h2>To read</h2><div class="shelfBooks"></div></div>
   <div class="shelf" data-shelf="finished"><h2>Finished</h2><div class="shelfBooks"></div></div>
@@ -307,7 +311,13 @@
 <!-- per-book menu (change cover / remove) -->
 <div id="bookMenu" class="hidden">
   <div class="bmPanel">
-    <div class="bmTitle"></div>
+    <div class="bmTitle" id="bmTitle"></div>
+    <div class="bmLabel">Move to shelf</div>
+    <div class="bmShelves">
+      <button class="btn" data-shelf="reading">Reading</button>
+      <button class="btn" data-shelf="tbr">To read</button>
+      <button class="btn" data-shelf="finished">Finished</button>
+    </div>
     <button class="btn" id="bmCover">Change cover…</button>
     <button class="btn" id="bmRemove">Remove book</button>
     <button class="btn" id="bmCancel">Cancel</button>
@@ -660,7 +670,7 @@ async function addBookFromFile(file){
 
 let libUrls = [];
 async function renderLibrary(){
-  libUrls.splice(0).forEach(URL.revokeObjectURL);
+  const prevUrls = libUrls; libUrls = [];   // revoke OLD urls only after the new DOM exists (revoking first blanked covers)
   const books = (await dbAll()).sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
   for (const shelf of ['reading', 'tbr', 'finished']){
     const box = document.querySelector('.shelf[data-shelf="' + shelf + '"] .shelfBooks');
@@ -670,12 +680,24 @@ async function renderLibrary(){
     else list.forEach(b => box.appendChild(bookCoverEl(b)));
   }
   $('libHint').classList.toggle('hidden', books.length > 0);
+  prevUrls.forEach(u => URL.revokeObjectURL(u));
+}
+function paintColorCover(art, rec){
+  art.innerHTML = '';
+  art.style.background = rec.color || '#59504a';
+  const t = document.createElement('span'); t.className = 'coverText'; t.textContent = rec.title || '';
+  art.appendChild(t);
 }
 function bookCoverEl(rec){
   const el = document.createElement('div'); el.className = 'libBook'; el.dataset.id = rec.id;
   const art = document.createElement('div'); art.className = 'cover';
-  if (rec.cover){ const img = document.createElement('img'); const u = URL.createObjectURL(rec.cover); libUrls.push(u); img.src = u; img.alt = ''; art.appendChild(img); }
-  else { art.style.background = rec.color || '#59504a'; const t = document.createElement('span'); t.className = 'coverText'; t.textContent = rec.title; art.appendChild(t); }
+  if (rec.cover){
+    const img = document.createElement('img');
+    const u = URL.createObjectURL(rec.cover); libUrls.push(u);
+    img.src = u; img.alt = '';
+    img.onerror = () => paintColorCover(art, rec);   // unreadable blob → colour cover instead of a blank
+    art.appendChild(img);
+  } else paintColorCover(art, rec);
   const cap = document.createElement('div'); cap.className = 'libCap'; cap.textContent = rec.title;
   // progress bar + "page / total"
   const started = rec.pos && rec.pos.pages;
@@ -688,8 +710,8 @@ function bookCoverEl(rec){
   num.textContent = started ? (rec.pos.page + ' / ' + rec.pos.pages) : 'Not started';
   prog.append(bar, num);
   const menu = document.createElement('button'); menu.className = 'libMenu'; menu.textContent = '⋯'; menu.setAttribute('aria-label', 'Book options');
-  menu.addEventListener('pointerdown', e => e.stopPropagation());
   menu.onclick = e => { e.stopPropagation(); openBookMenu(rec); };
+  el.onclick = () => openBookById(rec.id);   // plain tap to open — no gesture juggling
   el.append(art, cap, prog, menu);
   return el;
 }
@@ -702,72 +724,17 @@ async function openBookById(id){
   await openParsed(parsed);
 }
 
-/* ---- drag a cover onto a shelf (long-press to pick up; tap to open) ---- */
-let drag = null;
-let dragPointerId = null;
-function libPointerDown(e){
-  if (drag) endDrag();   // clear any stale/stuck drag before starting a new one
-  const el = e.target.closest('.libBook'); if (!el || e.target.closest('.libMenu')) return;
-  dragPointerId = e.pointerId;
-  drag = { id: el.dataset.id, el, x0: e.clientX, y0: e.clientY, dragging: false, ghost: null };
-  drag.hold = setTimeout(() => startDrag(e.clientX, e.clientY), 220);
-  window.addEventListener('pointermove', libPointerMove);
-  window.addEventListener('pointerup', libPointerUp);
-  window.addEventListener('pointercancel', libPointerCancel);   // touch/iOS can cancel — must clean up or it freezes
-}
-function startDrag(x, y){
-  if (!drag) return;
-  drag.dragging = true;
-  try { drag.el.setPointerCapture(dragPointerId); } catch(e){}   // own the gesture so the browser doesn't hijack it to scroll
-  const g = drag.el.querySelector('.cover').cloneNode(true);
-  g.classList.add('dragGhost'); g.style.width = '68px'; g.style.height = '102px';
-  document.body.appendChild(g); drag.ghost = g; drag.el.classList.add('dragging');
-  $('library').style.overflow = 'hidden';
-  moveGhost(x, y);
-  if (navigator.vibrate) navigator.vibrate(10);
-}
-function libPointerCancel(){ endDrag(); }   // gesture reclaimed → abort cleanly (no freeze)
-function moveGhost(x, y){ if (drag && drag.ghost){ drag.ghost.style.left = (x - 34) + 'px'; drag.ghost.style.top = (y - 51) + 'px'; } }
-function shelfAt(x, y){ const el = document.elementFromPoint(x, y); const s = el && el.closest('.shelf'); return s ? s.dataset.shelf : null; }
-function highlightShelf(x, y){ document.querySelectorAll('.shelf.dragover').forEach(s => s.classList.remove('dragover')); const el = document.elementFromPoint(x, y); const s = el && el.closest('.shelf'); if (s) s.classList.add('dragover'); }
-function libPointerMove(e){
-  if (!drag) return;
-  if (!drag.dragging){
-    if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > 10){ clearTimeout(drag.hold); endDrag(); }   // moved first = a scroll
-    return;
-  }
-  e.preventDefault();
-  moveGhost(e.clientX, e.clientY); highlightShelf(e.clientX, e.clientY);
-}
-async function libPointerUp(e){
-  if (!drag) return;
-  clearTimeout(drag.hold);
-  const d = drag;
-  if (d.dragging){
-    const shelf = shelfAt(e.clientX, e.clientY); endDrag();
-    if (shelf) await moveBookToShelf(d.id, shelf);
-  } else {
-    const tap = Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 10; endDrag();
-    if (tap) openBookById(d.id);
-  }
-}
-function endDrag(){
-  if (drag){
-    if (drag.ghost) drag.ghost.remove();
-    if (drag.el){ drag.el.classList.remove('dragging'); try { drag.el.releasePointerCapture(dragPointerId); } catch(e){} }
-  }
-  document.querySelectorAll('.shelf.dragover').forEach(s => s.classList.remove('dragover'));
-  $('library').style.overflow = '';
-  window.removeEventListener('pointermove', libPointerMove);
-  window.removeEventListener('pointerup', libPointerUp);
-  window.removeEventListener('pointercancel', libPointerCancel);
-  drag = null; dragPointerId = null;
-}
+// (Shelf changes are handled by the ⋯ menu on each book — no drag gestures to fight with.)
 async function moveBookToShelf(id, shelf){ const rec = await dbGet(id); if (!rec || rec.shelf === shelf) return; rec.shelf = shelf; await dbPut(rec); renderLibrary(); }
 
 /* ---- per-book menu ---- */
 let menuBookId = null;
-function openBookMenu(rec){ menuBookId = rec.id; $('bmTitle').textContent = rec.title; $('bookMenu').classList.remove('hidden'); }
+function openBookMenu(rec){
+  menuBookId = rec.id;
+  $('bmTitle').textContent = rec.title || 'Book';
+  document.querySelectorAll('#bookMenu .bmShelves .btn').forEach(b => b.classList.toggle('on', b.dataset.shelf === rec.shelf));
+  $('bookMenu').classList.remove('hidden');
+}
 
 /* ---- library ↔ reader navigation + reading position ---- */
 async function backToLibrary(){
@@ -1301,7 +1268,11 @@ $('epubFile').addEventListener('change', e => { const f = e.target.files[0]; e.t
 $('startReading').onclick = openReader;
 $('btnHome').onclick = backToLibrary;
 $('coverBack').onclick = backToLibrary;
-$('library').addEventListener('pointerdown', libPointerDown);
+document.querySelectorAll('#bookMenu .bmShelves .btn').forEach(b => b.onclick = async () => {
+  if (!menuBookId) return;
+  await moveBookToShelf(menuBookId, b.dataset.shelf);
+  $('bookMenu').classList.add('hidden');
+});
 $('bmCover').onclick = () => $('coverFile').click();
 $('coverFile').addEventListener('change', async e => {
   const f = e.target.files[0]; e.target.value = '';
