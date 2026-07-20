@@ -45,10 +45,10 @@
   #coverMeta .btn{margin-top:20px;}
 
   /* ---------- reader shell ---------- */
-  #reader{height:100%; display:flex; flex-direction:column;}
+  #reader{height:100%; display:flex; flex-direction:column; max-width:640px; margin:0 auto;}
   #topbar,#botbar{flex:0 0 auto; background:var(--chrome); display:flex; align-items:center; gap:8px; padding:8px 12px;}
-  #topbar{border-bottom:1px solid var(--line);}
-  #botbar{border-top:1px solid var(--line);}
+  #topbar{border-bottom:1px solid var(--line); padding-top:calc(8px + env(safe-area-inset-top));}
+  #botbar{border-top:1px solid var(--line); padding-bottom:calc(8px + env(safe-area-inset-bottom));}
   #bookTitle{flex:1 1 auto; font:600 14px/1.2 Georgia,serif; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .iconbtn{flex:0 0 auto; border:1px solid var(--line); background:var(--paper); color:var(--ink);
     height:38px; min-width:44px; padding:0 12px; border-radius:9px; font-size:14px; cursor:pointer;}
@@ -98,7 +98,7 @@
   /* ---------- display settings (bottom sheet) ---------- */
   #setWrap{position:fixed; inset:0; z-index:16; background:rgba(20,16,10,.42); display:flex; align-items:flex-end;}
   #setPanel{width:100%; background:var(--chrome); border-top:1px solid var(--line); border-radius:16px 16px 0 0;
-    padding:8px 16px 26px; max-height:82%; overflow:auto;}
+    padding:8px 16px calc(26px + env(safe-area-inset-bottom)); max-height:82%; overflow:auto;}
   #setPanel .grip{width:38px; height:4px; border-radius:2px; background:var(--line); margin:8px auto 10px;}
   .setRow{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 2px; border-bottom:1px solid var(--line);}
   .setRow:last-child{border-bottom:none;}
@@ -135,16 +135,19 @@
   .excRow input[type=color]{width:54px; height:34px; padding:0; border:1px solid var(--line); border-radius:8px; background:none; cursor:pointer;}
 
   /* ---------- library / shelves ---------- */
-  #library{height:100%; overflow-y:auto; padding:18px 16px 40px;}
+  #library{height:100%; overflow-y:auto; max-width:640px; margin:0 auto;
+    padding:calc(18px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom));}
   .libHead{display:flex; align-items:center; justify-content:space-between; gap:12px;}
-  .libHead h1{font:600 24px/1.1 Georgia,serif; margin:0; color:var(--ink);}
+  .libHead h1{font:600 22px/1.1 Georgia,serif; margin:0; color:var(--ink); min-width:0;}
+  .libActions{display:flex; gap:8px; align-items:center; flex:0 0 auto;}
+  .libHead .btn.primary{padding:9px 13px; font-size:14px; white-space:nowrap;}
   #libHint{color:var(--ink-dim); font-size:13px; margin:10px 2px 4px; line-height:1.5;}
   .shelf{margin:16px 0; border-radius:12px; padding:6px 8px 10px; transition:background .12s, outline-color .12s; outline:2px dashed transparent;}
   .shelf.dragover{background:rgba(107,181,189,.16); outline-color:var(--accent);}
   .shelf h2{font:600 12px/1 -apple-system,system-ui,sans-serif; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-dim); margin:4px 2px 12px;}
   .shelfBooks{display:flex; gap:16px; flex-wrap:wrap; min-height:150px;}
   .shelfEmpty{color:var(--ink-dim); opacity:.5; font-size:13px; padding:52px 2px;}
-  .libBook{width:96px; cursor:pointer; user-select:none; -webkit-user-select:none; position:relative; touch-action:pan-y;}
+  .libBook{width:96px; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; position:relative; touch-action:pan-y;}
   .libBook .cover{width:96px; height:144px; border-radius:5px; overflow:hidden; box-shadow:0 3px 10px rgba(0,0,0,.25);
     background:#59504a; display:flex; align-items:center; justify-content:center; position:relative;}
   .libBook .cover img{width:100%; height:100%; object-fit:cover; display:block;}
@@ -162,18 +165,18 @@
     display:flex; align-items:center; justify-content:center; background:#59504a;}
   .cover.dragGhost img{width:100%; height:100%; object-fit:cover;}
 
-  .coverBack{position:absolute; top:14px; left:12px; z-index:2; background:rgba(255,255,255,.12); color:#f3ead6;
+  .coverBack{position:absolute; top:calc(14px + env(safe-area-inset-top)); left:12px; z-index:2; background:rgba(255,255,255,.12); color:#f3ead6;
     border:1px solid rgba(255,255,255,.28); border-radius:9px; padding:7px 12px; font-size:14px; cursor:pointer;}
 
   #bookMenu{position:fixed; inset:0; z-index:29; background:rgba(15,12,8,.5); display:flex; align-items:flex-end;}
-  #bookMenu .bmPanel{width:100%; background:var(--chrome); border-radius:16px 16px 0 0; padding:16px; display:flex; flex-direction:column; gap:10px;}
+  #bookMenu .bmPanel{width:100%; background:var(--chrome); border-radius:16px 16px 0 0; padding:16px 16px calc(16px + env(safe-area-inset-bottom)); display:flex; flex-direction:column; gap:10px;}
   #bookMenu .bmTitle{font:600 15px Georgia,serif; color:var(--ink); text-align:center; margin-bottom:4px;}
   #bookMenu .btn{width:100%; text-align:center;}
 
   /* nav menu */
   .menu-btn{width:42px; height:42px; border-radius:11px; background:var(--paper); border:1px solid var(--line); color:var(--ink); font-size:19px; cursor:pointer; flex:0 0 auto;}
   .menu-overlay{position:fixed; inset:0; z-index:200; background:rgba(20,16,10,.5);}
-  .menu-card{position:absolute; top:12px; right:12px; min-width:210px; background:var(--chrome); border:1px solid var(--line); border-radius:14px; padding:6px; box-shadow:0 14px 36px rgba(0,0,0,.35);}
+  .menu-card{position:absolute; top:calc(12px + env(safe-area-inset-top)); right:12px; min-width:210px; background:var(--chrome); border:1px solid var(--line); border-radius:14px; padding:6px; box-shadow:0 14px 36px rgba(0,0,0,.35);}
   .menu-card h3{margin:8px 12px; font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-dim);}
   .menu-item{display:flex; align-items:center; gap:12px; padding:12px 14px; border-radius:9px; color:var(--ink); text-decoration:none; font-size:15px;}
   .menu-item:active{background:var(--paper);}
@@ -200,9 +203,9 @@
 <div id="library">
   <div class="libHead">
     <h1>Steady Reader</h1>
-    <div style="display:flex; gap:8px; align-items:center;">
-      <button id="menuBtn" class="menu-btn" aria-label="Menu">☰</button>
+    <div class="libActions">
       <label class="btn primary" for="epubFile">＋ Add book</label>
+      <button id="menuBtn" class="menu-btn" aria-label="Menu">☰</button>
     </div>
     <input id="epubFile" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" hidden>
   </div>
@@ -701,16 +704,21 @@ async function openBookById(id){
 
 /* ---- drag a cover onto a shelf (long-press to pick up; tap to open) ---- */
 let drag = null;
+let dragPointerId = null;
 function libPointerDown(e){
+  if (drag) endDrag();   // clear any stale/stuck drag before starting a new one
   const el = e.target.closest('.libBook'); if (!el || e.target.closest('.libMenu')) return;
+  dragPointerId = e.pointerId;
   drag = { id: el.dataset.id, el, x0: e.clientX, y0: e.clientY, dragging: false, ghost: null };
   drag.hold = setTimeout(() => startDrag(e.clientX, e.clientY), 220);
   window.addEventListener('pointermove', libPointerMove);
   window.addEventListener('pointerup', libPointerUp);
+  window.addEventListener('pointercancel', libPointerCancel);   // touch/iOS can cancel — must clean up or it freezes
 }
 function startDrag(x, y){
   if (!drag) return;
   drag.dragging = true;
+  try { drag.el.setPointerCapture(dragPointerId); } catch(e){}   // own the gesture so the browser doesn't hijack it to scroll
   const g = drag.el.querySelector('.cover').cloneNode(true);
   g.classList.add('dragGhost'); g.style.width = '68px'; g.style.height = '102px';
   document.body.appendChild(g); drag.ghost = g; drag.el.classList.add('dragging');
@@ -718,6 +726,7 @@ function startDrag(x, y){
   moveGhost(x, y);
   if (navigator.vibrate) navigator.vibrate(10);
 }
+function libPointerCancel(){ endDrag(); }   // gesture reclaimed → abort cleanly (no freeze)
 function moveGhost(x, y){ if (drag && drag.ghost){ drag.ghost.style.left = (x - 34) + 'px'; drag.ghost.style.top = (y - 51) + 'px'; } }
 function shelfAt(x, y){ const el = document.elementFromPoint(x, y); const s = el && el.closest('.shelf'); return s ? s.dataset.shelf : null; }
 function highlightShelf(x, y){ document.querySelectorAll('.shelf.dragover').forEach(s => s.classList.remove('dragover')); const el = document.elementFromPoint(x, y); const s = el && el.closest('.shelf'); if (s) s.classList.add('dragover'); }
@@ -743,12 +752,16 @@ async function libPointerUp(e){
   }
 }
 function endDrag(){
-  if (drag){ if (drag.ghost) drag.ghost.remove(); if (drag.el) drag.el.classList.remove('dragging'); }
+  if (drag){
+    if (drag.ghost) drag.ghost.remove();
+    if (drag.el){ drag.el.classList.remove('dragging'); try { drag.el.releasePointerCapture(dragPointerId); } catch(e){} }
+  }
   document.querySelectorAll('.shelf.dragover').forEach(s => s.classList.remove('dragover'));
   $('library').style.overflow = '';
   window.removeEventListener('pointermove', libPointerMove);
   window.removeEventListener('pointerup', libPointerUp);
-  drag = null;
+  window.removeEventListener('pointercancel', libPointerCancel);
+  drag = null; dragPointerId = null;
 }
 async function moveBookToShelf(id, shelf){ const rec = await dbGet(id); if (!rec || rec.shelf === shelf) return; rec.shelf = shelf; await dbPut(rec); renderLibrary(); }
 
