@@ -4,7 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="manifest" href="manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<!-- black-translucent makes iOS extend the web view edge-to-edge in standalone mode; WITHOUT it
+     env(safe-area-inset-*) reports 0 and the layout stops short of the screen bottom (the "gap"). -->
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0e1116">
 <title>Steady Reader</title>
 <style>
   :root{
@@ -82,6 +87,12 @@
      with tiles (only the visible page is rasterised), instead of compositing the entire ~120,000px
      strip as one GPU layer — which is what froze page turns on the phone. */
   #content.paged img{max-height:74vh; width:auto; margin:.6em auto;}
+  /* page-image mode: one rendered PDF page per row, vertically scrolled */
+  #content.pdfimg{max-width:720px; padding:12px 10px calc(40px + env(safe-area-inset-bottom));}
+  .pdfPage{width:100%; margin:0 auto 12px; background:#fff; border-radius:2px; overflow:hidden;
+    box-shadow:0 1px 8px rgba(0,0,0,.2); display:flex; align-items:center; justify-content:center;
+    color:var(--ink-dim); font-size:12px;}
+  .pdfPage img{width:100%; height:100%; object-fit:contain; display:block; cursor:zoom-in;}
   /* subtle tap zones only in paged mode */
   .tapzone{position:absolute; top:0; bottom:0; width:15%; z-index:2; display:none;}
   #scroller.paged .tapzone{display:block;}
@@ -302,6 +313,12 @@
         <button class="opt" data-cols="2">2</button>
       </div>
     </div>
+    <div class="setRow" id="pdfModeRow" hidden><span class="setLbl">PDF view</span>
+      <div class="opts">
+        <button class="opt" data-pdfmode="reflow">Reflow text</button>
+        <button class="opt" data-pdfmode="image">Original pages</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -340,7 +357,7 @@
 <!-- zoom overlay -->
 <div id="zoom" class="hidden"><img alt="Zoomed image"></div>
 
-<div class="prototype-tag">Steady Reader · v20</div>
+<div class="prototype-tag">Steady Reader · v22</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -533,14 +550,61 @@ function pdfDetectHeading(t){
   const letters = t.replace(/[^A-Za-z]/g, '');
   return letters.length >= 3 && letters === letters.toUpperCase() && t.length <= 52;
 }
+// Rebuild a line's text from glyph geometry rather than trusting pdf.js's synthetic spaces.
+// Letter-spaced source text (tracked headings, spaced-out URLs) makes pdf.js emit a space between
+// every glyph → "W W W . G E T…". We insert a space only where the x-gap is wide enough to be a
+// real word space, which fixes that while preserving genuine word breaks.
+function pdfRowText(items){
+  const sorted = items.slice().sort((a, b) => a.x - b.x);
+  let text = '', prevRight = null;
+  for (const it of sorted){
+    const s = it.str; if (s == null) continue;
+    if (prevRight != null){
+      const gap = it.x - prevRight, em = it.h || 11;
+      const spaced = /\s$/.test(text) || /^\s/.test(s);
+      if (!spaced && gap > em * 0.28) text += ' ';   // wide gap = word space; tight gap = letter-spacing
+    }
+    text += s;
+    prevRight = it.x + (it.w || 0);
+  }
+  return text.replace(/\s+/g, ' ').trim();
+}
+// Cheap check (no image decode): does the page paint any raster image?
+async function pdfPageHasImage(page){
+  try {
+    const ops = await page.getOperatorList(), L = pdfjsLib.OPS;
+    for (let i = 0; i < ops.fnArray.length; i++){
+      const fn = ops.fnArray[i];
+      if (fn === L.paintImageXObject || fn === L.paintJpegXObject ||
+          fn === L.paintImageXObjectRepeat || fn === L.paintInlineImageXObject) return true;
+    }
+  } catch(e){}
+  return false;
+}
 async function pdfExtractReflow(doc){
   const nPages = doc.numPages, pages = [];
   for (let p = 1; p <= nPages; p++){
     const page = await doc.getPage(p), vp = page.getViewport({ scale: 1 }), tc = await page.getTextContent();
     const rows = {};
-    for (const it of tc.items){ if (!it.str) continue; const y = Math.round(it.transform[5]); (rows[y] = rows[y] || { items: [], h: 0 }); rows[y].items.push({ x: it.transform[4], str: it.str }); rows[y].h = Math.max(rows[y].h, it.height || 11); }
-    const lines = Object.keys(rows).map(Number).sort((a, b) => b - a).map(y => { const r = rows[y]; return { y, h: r.h, x0: Math.min(...r.items.map(i => i.x)), text: r.items.sort((a, b) => a.x - b.x).map(i => i.str).join('').replace(/\s+/g, ' ').trim() }; }).filter(l => l.text);
-    pages.push({ lines, vpH: vp.height });
+    for (const it of tc.items){
+      if (!it.str) continue;
+      const y = Math.round(it.transform[5]);
+      (rows[y] = rows[y] || { items: [], h: 0 });
+      rows[y].items.push({ x: it.transform[4], w: it.width || 0, str: it.str });
+      rows[y].h = Math.max(rows[y].h, it.height || 11);
+    }
+    const lines = Object.keys(rows).map(Number).sort((a, b) => b - a).map(y => {
+      const r = rows[y];
+      return { y, h: r.h, x0: Math.min(...r.items.map(i => i.x)), text: pdfRowText(r.items) };
+    }).filter(l => l.text);
+    // An image-dominant page (little/no text but a real picture — a full-page figure or illustration)
+    // becomes an inline image in the flow, tappable to zoom, instead of being dropped.
+    const chars = lines.reduce((a, l) => a + l.text.length, 0);
+    let image = null;
+    if (chars < 25 && await pdfPageHasImage(page)){
+      try { const cv = await pdfPageToCanvas(doc, p, 1.6); image = cv.toDataURL('image/jpeg', 0.85); } catch(e){}
+    }
+    pages.push({ lines, vpH: vp.height, image });
   }
   // strip running headers/footers (repeat in the top/bottom margin) + standalone page numbers
   const freq = {};
@@ -552,9 +616,19 @@ async function pdfExtractReflow(doc){
   const blocks = []; let para = '', prevY = null, prevH = 12;
   const pushPara = () => { if (para.trim()) blocks.push({ type: 'p', text: para.trim() }); para = ''; };
   for (const pg of pages){
-    const body = pg.lines.filter(l => !isNoise(l, pg)); prevY = null;   // reset gap detection each page
+    if (pg.image){ pushPara(); blocks.push({ type: 'img', src: pg.image }); }
+    const body = pg.lines.filter(l => !isNoise(l, pg)); prevY = null; let prevHeading = false;   // reset each page
     for (const l of body){
-      if (pdfDetectHeading(l.text)){ pushPara(); blocks.push({ type: 'h', text: l.text.trim() }); prevY = null; continue; }
+      if (pdfDetectHeading(l.text)){
+        const last = blocks[blocks.length - 1];
+        // a heading that continues on the very next line (both caps, tight gap, no paragraph between)
+        // is ONE heading — not two, which would otherwise split it into two chapters
+        if (prevHeading && last && last.type === 'h' && !para && prevY != null && (prevY - l.y) < Math.max(prevH, l.h) * 1.9){
+          last.text += ' ' + l.text.trim();
+        } else { pushPara(); blocks.push({ type: 'h', text: l.text.trim() }); }
+        prevHeading = true; prevY = l.y; prevH = l.h; continue;
+      }
+      prevHeading = false;
       if (prevY != null){ const gap = prevY - l.y, lineH = Math.max(prevH, l.h) || 12; if (gap > lineH * 1.75) pushPara(); }   // big gap = paragraph break
       const seg = l.text.trim();
       if (para && /[A-Za-z]-$/.test(para)) para = para.replace(/-$/, '') + seg;   // de-hyphenate line ends
@@ -565,22 +639,31 @@ async function pdfExtractReflow(doc){
   pushPara();
   const esc = s => (s || '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   const chapters = []; let cur = { label: '', parts: [] };
-  for (const b of blocks){ if (b.type === 'h'){ if (cur.parts.length) chapters.push(cur); cur = { label: b.text, parts: [] }; } else cur.parts.push(b.text); }
-  if (cur.parts.length) chapters.push(cur);
-  if (!chapters.length) chapters.push({ label: '', parts: ['(No readable text found in this PDF.)'] });
-  return chapters.map(c => ({ label: c.label, html: (c.label ? `<h2>${esc(c.label)}</h2>` : '') + c.parts.map(t => `<p>${esc(t)}</p>`).join('') }));
+  for (const b of blocks){
+    if (b.type === 'h'){ if (cur.parts.length || cur.label) chapters.push(cur); cur = { label: b.text, parts: [] }; }
+    else if (b.type === 'img') cur.parts.push(`<img src="${b.src}" alt="Figure">`);
+    else cur.parts.push(`<p>${esc(b.text)}</p>`);
+  }
+  if (cur.parts.length || cur.label) chapters.push(cur);
+  if (!chapters.length) chapters.push({ label: '', parts: ['<p>(No readable text found in this PDF.)</p>'] });
+  return chapters.map(c => ({ label: c.label, html: (c.label ? `<h2>${esc(c.label)}</h2>` : '') + c.parts.join('') }));
 }
 async function openPdfBook(rec, fileBuf){
   const doc = await loadPdfDoc(fileBuf);
-  const textual = rec.pdfMode === 'reflow' ? true : await pdfLooksTextual(doc);
-  if (!textual){
-    alert('This PDF looks like scanned images (no text layer to reflow). A page-image view for scanned PDFs is coming soon.');
-    currentBookId = null; currentRec = null; return;
-  }
-  const chapters = await pdfExtractReflow(doc);
+  // pmode: 'reflow' = extract & reflow text; 'image' = original page images (scanned fallback + user choice).
+  // Honour a saved choice; otherwise auto-detect from whether there's a real text layer.
+  let pmode = (rec.pdfMode === 'reflow' || rec.pdfMode === 'image') ? rec.pdfMode
+            : ((await pdfLooksTextual(doc)) ? 'reflow' : 'image');
   objectUrls.splice(0).forEach(URL.revokeObjectURL);
-  book = { format: 'pdf-reflow', title: rec.title, author: rec.author, coverHref: null,
-    chapters, toc: chapters.map((c, i) => ({ label: c.label || ('Section ' + (i + 1)), idx: i })) };
+  if (pmode === 'image'){
+    book = { format: 'pdf-image', isPdf: true, pdfMode: 'image', pdfDoc: doc, numPages: doc.numPages,
+      title: rec.title, author: rec.author, coverHref: null, toc: [] };
+  } else {
+    const chapters = await pdfExtractReflow(doc);
+    book = { format: 'pdf-reflow', isPdf: true, pdfMode: 'reflow', pdfDoc: doc,
+      title: rec.title, author: rec.author, coverHref: null,
+      chapters, toc: chapters.map((c, i) => ({ label: c.label || ('Section ' + (i + 1)), idx: i })) };
+  }
   await showCover();
 }
 
@@ -616,6 +699,9 @@ async function parseToc(zip, opf, opfDir, manifest, spine){
 
 /* ---------- cover ---------- */
 async function showCover(){
+  $('bookTitle').textContent = book.title;   // reader topbar needs this on both paths
+  // Already started? Skip the cover/"Start reading" screen and reopen at her last page.
+  if (currentRec && currentRec.pos){ openReader(); return; }
   $('library').classList.add('hidden');
   $('reader').classList.add('hidden');
   $('coverTitle').textContent = book.title;
@@ -812,6 +898,11 @@ async function backToLibrary(){
   await renderLibrary();
 }
 function currentPosition(){
+  if (isImageMode()){
+    const idx = currentImagePage(), N = book.numPages || 1;
+    // pmode + overall let us land near the same spot if she later flips reflow⇄original
+    return { pmode: 'image', imagePage: idx, overall: N ? idx / N : 0, page: idx + 1, pages: N };
+  }
   const i = currentChapterIndex();
   let frac = 0;
   if (mode === 'paged'){
@@ -822,14 +913,32 @@ function currentPosition(){
     frac = t1 > t0 ? ($('scroller').scrollTop - t0) / (t1 - t0) : 0;
   }
   // page/pages let the library show a progress bar + "150 / 300"
-  return { chapter: i, frac: Math.max(0, Math.min(1, frac)), page: canonicalPageIndex() + 1, pages: canon.total };
+  const total = canon.total || 1;
+  return { pmode: 'text', chapter: i, frac: Math.max(0, Math.min(1, frac)),
+    overall: total ? canonicalPageIndex() / total : 0, page: canonicalPageIndex() + 1, pages: total };
 }
 async function saveCurrentPosition(){
   if (!currentBookId) return;
   try { const rec = await dbGet(currentBookId); if (rec){ rec.pos = currentPosition(); await dbPut(rec); } } catch(e){}
 }
 function restorePosition(pos){
-  if (!pos || !chapterAnchors.length) return;
+  if (!pos) return;
+  if (isImageMode()){
+    const wraps = $('content').querySelectorAll('.pdfPage'), N = book.numPages || 1;
+    let idx = (pos.pmode === 'image' && pos.imagePage != null) ? pos.imagePage : Math.round((pos.overall || 0) * (N - 1));
+    idx = Math.max(0, Math.min(N - 1, idx));
+    if (wraps[idx]) wraps[idx].scrollIntoView();
+    updateProgress();
+    return;
+  }
+  if (!chapterAnchors.length) return;
+  // position saved in image mode → jump proportionally (no matching chapter/frac to use)
+  if (pos.pmode === 'image'){
+    const total = canon.total || 1;
+    if (mode === 'paged') goToPage(Math.round((pos.overall || 0) * (total - 1)), false);
+    else { $('scroller').scrollTop = (pos.overall || 0) * Math.max(0, $('content').scrollHeight - $('scroller').clientHeight); updateProgress(); }
+    return;
+  }
   const i = Math.max(0, Math.min(pos.chapter || 0, chapterAnchors.length - 1));
   if (mode === 'paged'){
     const p0 = canon.chapStartPage[i] || 0, p1 = (i + 1 < canon.chapStartPage.length) ? canon.chapStartPage[i + 1] : canon.total;
@@ -849,6 +958,8 @@ let chapterAnchors = [];
 async function renderBook(){
   const content = $('content');
   content.innerHTML = '';
+  content.classList.remove('pdfimg');
+  if (book.format === 'pdf-image'){ await renderPdfImages(content); return; }
   if (book.format === 'pdf-reflow'){
     book.chapters.forEach((c, i) => {
       const anchor = document.createElement('div'); anchor.className = 'chap-anchor'; anchor.dataset.i = i;
@@ -881,6 +992,51 @@ async function renderBook(){
     while (wrap.firstChild) content.appendChild(wrap.firstChild);
   }
   chapterAnchors = [...content.querySelectorAll('.chap-anchor')];
+}
+
+/* ---- page-image mode (scanned PDFs + "Original pages" choice) ---- */
+// One vertically-scrolled image per PDF page, rendered lazily as it nears the viewport so a big
+// book doesn't rasterise all at once. Placeholder boxes hold each page's height up front so scroll
+// geometry (and the page readout) is stable before the images arrive.
+const PDFIMG_MAXSCALE = 2.5;
+async function renderPdfImages(content){
+  content.classList.add('pdfimg');
+  const doc = book.pdfDoc, N = doc.numPages;
+  const first = await doc.getPage(1), vp1 = first.getViewport({ scale: 1 });
+  const aspect = vp1.height / vp1.width;
+  const cw = Math.max(200, Math.min(content.clientWidth || 640, 700) - 20);   // page draw width in css px
+  const dpr = window.devicePixelRatio || 1;
+  book._pdfScale = Math.min(PDFIMG_MAXSCALE, (cw * dpr) / vp1.width);
+  const wraps = [];
+  for (let i = 0; i < N; i++){
+    const anchor = document.createElement('div'); anchor.className = 'chap-anchor'; anchor.dataset.i = i; content.appendChild(anchor);
+    const w = document.createElement('div'); w.className = 'pdfPage'; w.dataset.page = i + 1;
+    w.style.height = Math.round(cw * aspect) + 'px'; w.textContent = '·';
+    content.appendChild(w); wraps.push(w);
+  }
+  chapterAnchors = [...content.querySelectorAll('.chap-anchor')];
+  if (book._pdfIO) book._pdfIO.disconnect();
+  book._pdfIO = new IntersectionObserver(ents => {
+    for (const e of ents){ if (e.isIntersecting){ book._pdfIO.unobserve(e.target); renderOnePdfPage(e.target); } }
+  }, { root: $('scroller'), rootMargin: '1200px 0px' });
+  wraps.forEach(w => book._pdfIO.observe(w));
+}
+async function renderOnePdfPage(w){
+  const n = parseInt(w.dataset.page); if (!n || w.dataset.done) return;
+  w.dataset.done = '1';
+  try {
+    const cv = await pdfPageToCanvas(book.pdfDoc, n, book._pdfScale || 1.5);
+    const img = document.createElement('img'); img.decoding = 'async'; img.alt = 'Page ' + n;
+    img.src = cv.toDataURL('image/jpeg', 0.85);
+    w.textContent = ''; w.appendChild(img);
+  } catch(e){ w.textContent = '(couldn’t render page ' + n + ')'; }
+}
+function isImageMode(){ return !!(book && book.format === 'pdf-image'); }
+function currentImagePage(){
+  const wraps = $('content').querySelectorAll('.pdfPage'); if (!wraps.length) return 0;
+  const y = $('scroller').getBoundingClientRect().top + 80; let idx = 0;
+  for (let i = 0; i < wraps.length; i++){ if (wraps[i].getBoundingClientRect().top <= y) idx = i; else break; }
+  return idx;
 }
 
 /* ============================================================
@@ -933,6 +1089,7 @@ function clearPagedStyles(){
 
 /* ---- measure BOTH layouts once to build the shared page model ---- */
 function measureCanonical(){
+  if (isImageMode()) return;   // image mode has its own page model (one image = one page)
   const sc = $('scroller'), ct = $('content');
   // scroll-flow positions (paged off)
   sc.classList.remove('paged'); ct.classList.remove('paged'); clearPagedStyles();
@@ -953,6 +1110,15 @@ function measureCanonical(){
 /* ---- apply the active mode, keeping reading position ---- */
 function applyMode(restoreChapter){
   const sc = $('scroller'), ct = $('content');
+  if (isImageMode()){
+    // page images are inherently paged, scrolled vertically — no column flip, no text selection
+    mode = 'scroll';
+    sc.classList.remove('paged'); ct.classList.remove('paged'); clearPagedStyles();
+    $('modeBtn').classList.add('hidden'); $('btnExcerpt').classList.add('hidden');
+    updateProgress();
+    return;
+  }
+  $('modeBtn').classList.remove('hidden'); $('btnExcerpt').classList.remove('hidden');
   if (mode === 'paged'){
     sc.classList.add('paged'); ct.classList.add('paged');
     pageStep = applyPagedStyles();
@@ -974,6 +1140,7 @@ function setMode(m){
 function toggleMode(){ setMode(mode === 'paged' ? 'scroll' : 'paged'); }
 
 function currentChapterIndex(){
+  if (isImageMode()) return currentImagePage();
   if (mode === 'paged'){
     let idx = 0;
     for (let i = 0; i < canon.chapStartPage.length; i++){ if (canon.chapStartPage[i] <= currentPage) idx = i; else break; }
@@ -1029,6 +1196,7 @@ function canonicalPageIndex(){          // 0-based canonical page the reader is 
   return Math.max(0, Math.min(canon.total - 1, Math.round(p0 + frac * (p1 - p0))));
 }
 function updateProgress(){
+  if (isImageMode()){ $('progress').textContent = 'Page ' + (currentImagePage() + 1) + ' of ' + (book.numPages || 1); return; }
   const cp = canonicalPageIndex();
   let next = canon.total;
   for (const sp of canon.chapStartPage){ if (sp > cp){ next = sp; break; } }
@@ -1122,6 +1290,7 @@ function setFont(px){
 // Recompute the page model + reapply the current mode without losing the reader's place.
 // Only meaningful once a book is loaded.
 function relayoutKeepingPlace(){
+  if (isImageMode()) return;   // page images don't reflow with text settings
   if (!chapterAnchors.length) return;
   const i = currentChapterIndex();
   measureCanonical();
@@ -1157,6 +1326,19 @@ function updateSettingsUI(){
   document.querySelectorAll('[data-lh]').forEach(b => b.classList.toggle('sel', parseFloat(b.dataset.lh) === lineH));
   document.querySelectorAll('[data-cols]').forEach(b => b.classList.toggle('sel', parseInt(b.dataset.cols) === colsPerPage));
   const v = $('fsVal'); if (v) v.textContent = fontPx + 'px';
+  const isPdf = !!(book && book.isPdf), row = $('pdfModeRow');
+  if (row) row.hidden = !isPdf;
+  document.querySelectorAll('[data-pdfmode]').forEach(b => b.classList.toggle('sel', isPdf && b.dataset.pdfmode === book.pdfMode));
+}
+// Switch a PDF between reflowed text and original page images. The choice is saved on the record,
+// then the book is reopened in the new mode (landing near the same spot via the saved position).
+async function switchPdfMode(m){
+  if (!book || !book.isPdf || book.pdfMode === m || !currentBookId) return;
+  await flushReadTime();
+  await saveCurrentPosition();
+  try { const rec = await dbGet(currentBookId); if (rec){ rec.pdfMode = m; await dbPut(rec); } } catch(e){}
+  $('setWrap').classList.add('hidden');
+  await openBookById(currentBookId);   // reopens; showCover skips straight to her place since pos exists
 }
 
 /* ============================================================
@@ -1408,6 +1590,7 @@ buildFontOptions();
 document.querySelectorAll('.swatch').forEach(s => s.onclick = () => applyTheme(s.dataset.theme));
 document.querySelectorAll('[data-lh]').forEach(b => b.onclick = () => applyLineH(parseFloat(b.dataset.lh)));
 document.querySelectorAll('[data-cols]').forEach(b => b.onclick = () => applyCols(parseInt(b.dataset.cols)));
+document.querySelectorAll('[data-pdfmode]').forEach(b => b.onclick = () => switchPdfMode(b.dataset.pdfmode));
 $('fsMinus').onclick = () => setFont(fontPx - 1);
 $('fsPlus').onclick = () => setFont(fontPx + 1);
 $('btnSettings').onclick = () => { updateSettingsUI(); $('setWrap').classList.remove('hidden'); };
