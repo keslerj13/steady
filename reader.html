@@ -75,8 +75,12 @@
   /* paged (swipe-to-flip) mode: lay the same flow into viewport-wide columns and slide */
   #scroller.paged{overflow:hidden; touch-action:none;}
   #content.paged{max-width:none; margin:0; padding:28px 0; column-fill:auto; -webkit-column-fill:auto;
-    height:100%; will-change:transform; orphans:1; widows:1;}   /* orphans/widows 1 = fill the page instead of
-                                                                   pushing whole paragraphs to the next one */
+    height:100%; overflow:hidden; orphans:1; widows:1;}   /* orphans/widows 1 = fill the page instead of
+                                                             pushing whole paragraphs to the next one.
+     overflow:hidden makes the columns a programmatically-scrollable strip: we page by setting
+     scrollLeft rather than transform-translating the whole book. iOS renders scrollable overflow
+     with tiles (only the visible page is rasterised), instead of compositing the entire ~120,000px
+     strip as one GPU layer — which is what froze page turns on the phone. */
   #content.paged img{max-height:74vh; width:auto; margin:.6em auto;}
   /* subtle tap zones only in paged mode */
   .tapzone{position:absolute; top:0; bottom:0; width:15%; z-index:2; display:none;}
@@ -336,7 +340,7 @@
 <!-- zoom overlay -->
 <div id="zoom" class="hidden"><img alt="Zoomed image"></div>
 
-<div class="prototype-tag">Steady Reader</div>
+<div class="prototype-tag">Steady Reader · v20</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -759,7 +763,10 @@ function bookCoverEl(rec, coverUrl){
   fill.style.width = (started ? Math.max(0, Math.min(1, rec.pos.page / rec.pos.pages)) * 100 : 0) + '%';
   bar.appendChild(fill);
   const num = document.createElement('div'); num.className = 'libNum';
-  num.textContent = started ? (rec.pos.page + ' / ' + rec.pos.pages) : 'Not started';
+  if (started){
+    const pct = Math.round(Math.max(0, Math.min(1, rec.pos.page / rec.pos.pages)) * 100);
+    num.textContent = rec.pos.page + ' / ' + rec.pos.pages + ' · ' + pct + '%';
+  } else num.textContent = 'Not started';
   prog.append(bar, num);
   const menu = document.createElement('button'); menu.className = 'libMenu'; menu.textContent = '⋯'; menu.setAttribute('aria-label', 'Book options');
   menu.onclick = e => { e.stopPropagation(); openBookMenu(rec); };
@@ -918,7 +925,8 @@ function applyPagedStyles(){
 }
 function clearPagedStyles(){
   const ct = $('content');
-  ct.style.transform = ''; ct.style.transition = '';
+  if (flipRAF){ cancelAnimationFrame(flipRAF); flipRAF = null; }
+  ct.style.transform = ''; ct.style.transition = ''; ct.scrollLeft = 0;
   ct.style.height = ''; ct.style.columnWidth = ''; ct.style.columnGap = ''; ct.style.width = ''; ct.style.marginLeft = '';
   ct.style.paddingTop = ''; ct.style.paddingBottom = '';
 }
@@ -978,12 +986,28 @@ function currentChapterIndex(){
 }
 
 /* ---- navigation (paged) ---- */
+// Slide by scrolling the column strip (scrollLeft), animated with rAF so it stays smooth without
+// asking iOS to composite the whole strip. Each frame repaints only the visible page, so this
+// never hits the giant-layer freeze the old transform approach did.
+let flipRAF = null;
+function scrollPagedTo(x, animate){
+  const ct = $('content');
+  if (flipRAF){ cancelAnimationFrame(flipRAF); flipRAF = null; }
+  const target = Math.round(x);
+  if (!animate){ ct.scrollLeft = target; return; }
+  const from = ct.scrollLeft, dist = target - from, t0 = performance.now(), dur = 200;
+  const ease = p => 1 - (1 - p) * (1 - p);   // ease-out quad
+  const step = now => {
+    const p = Math.min(1, (now - t0) / dur);
+    ct.scrollLeft = from + dist * ease(p);
+    flipRAF = p < 1 ? requestAnimationFrame(step) : null;
+  };
+  flipRAF = requestAnimationFrame(step);
+}
 function goToPage(p, animate = true){
   if (typeof lastInteract !== 'undefined') lastInteract = Date.now();   // a flip counts as reading activity
   currentPage = Math.max(0, Math.min(p, canon.total - 1));
-  const ct = $('content');
-  ct.style.transition = animate ? 'transform .2s ease' : 'none';
-  ct.style.transform = 'translateX(' + (-currentPage * pageStep) + 'px)';
+  scrollPagedTo(currentPage * pageStep, animate);
   if (typeof hideExcerptBtn === 'function') hideExcerptBtn();   // selection is meaningless after a flip
   updateProgress();
 }
