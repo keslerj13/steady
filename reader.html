@@ -56,6 +56,15 @@
   /* Pinned to the viewport rather than sized by height:100% — a fixed box is measured against the
      real screen edges, so the footer always lands flush at the bottom on iOS. */
   #reader{position:fixed; inset:0; display:flex; flex-direction:column; max-width:640px; margin:0 auto; background:var(--paper);}
+  /* Installed (standalone) iOS hands the page a layout viewport that stops one status-bar-height
+     short of the physical bottom (measured: inner 812 vs screen 874, ruler v25) — so height:100%,
+     100dvh and fixed inset:0 all end 62pt above the screen edge. Plain 100vh is the one unit that
+     spans the real screen there, so use it — but only in installed mode; in-browser 100vh
+     over-shoots when Safari's toolbars are up. */
+  @media (display-mode: standalone){
+    html,body{height:100vh;}
+    #reader{bottom:auto; height:100vh;}
+  }
   /* TEMP v25 gap ruler: three bars each pinned to "the bottom" by a different mechanism.
      Whichever bar reaches the physical bottom of the screen names the unit that fixes the gap. */
   #drRed{position:fixed; left:0; width:33%; bottom:0; height:8px; background:#e53935; z-index:400; pointer-events:none;}
@@ -365,7 +374,7 @@
 <!-- zoom overlay -->
 <div id="zoom" class="hidden"><img alt="Zoomed image"></div>
 
-<div class="prototype-tag">Steady Reader · v25</div>
+<div class="prototype-tag">Steady Reader · v26</div>
 <!-- TEMP v25 gap ruler -->
 <div id="drRed"></div><div id="drBlue"></div><div id="drGreen"></div>
 <div id="drTxt"></div>
