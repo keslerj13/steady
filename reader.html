@@ -65,14 +65,6 @@
     html,body{height:100vh;}
     #reader{bottom:auto; height:100vh;}
   }
-  /* TEMP v25 gap ruler: three bars each pinned to "the bottom" by a different mechanism.
-     Whichever bar reaches the physical bottom of the screen names the unit that fixes the gap. */
-  #drRed{position:fixed; left:0; width:33%; bottom:0; height:8px; background:#e53935; z-index:400; pointer-events:none;}
-  #drBlue{position:fixed; left:33%; width:34%; top:calc(100vh - 8px); height:8px; background:#1e88e5; z-index:400; pointer-events:none;}
-  #drGreen{position:fixed; left:67%; right:0; top:calc(100lvh - 8px); height:8px; background:#43a047; z-index:400; pointer-events:none;}
-  #drTxt{position:fixed; left:6px; top:calc(64px + env(safe-area-inset-top)); z-index:401;
-    background:rgba(0,0,0,.85); color:#7CFC98; font:11px/1.45 ui-monospace,Menlo,monospace;
-    padding:6px 8px; border-radius:6px; white-space:pre; pointer-events:none; max-width:94vw;}
   #topbar,#botbar{flex:0 0 auto; background:var(--chrome); display:flex; align-items:center; gap:8px; padding:8px 12px;}
   #topbar{border-bottom:1px solid var(--line); padding-top:calc(8px + env(safe-area-inset-top));}
   #botbar{border-top:1px solid var(--line); padding-bottom:calc(8px + env(safe-area-inset-bottom));}
@@ -374,10 +366,7 @@
 <!-- zoom overlay -->
 <div id="zoom" class="hidden"><img alt="Zoomed image"></div>
 
-<div class="prototype-tag">Steady Reader · v26</div>
-<!-- TEMP v25 gap ruler -->
-<div id="drRed"></div><div id="drBlue"></div><div id="drGreen"></div>
-<div id="drTxt"></div>
+<div class="prototype-tag">Steady Reader · v28</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -1090,28 +1079,6 @@ function openReader(){
   $('reader').classList.remove('hidden');
   renderBook().then(() => { measureCanonical(); applyMode(0); if (currentRec && currentRec.pos) restorePosition(currentRec.pos); });
 }
-// TEMP v25: report every "viewport height" iOS offers, so we can see which one spans the screen.
-function fillGapRuler(){
-  const d = $('drTxt'); if (!d) return;
-  const p = document.createElement('div');
-  p.style.cssText = 'position:fixed;left:-9999px;top:0;width:10px;';
-  document.body.appendChild(p);
-  const meas = u => { p.style.height = '0px'; p.style.height = u; return Math.round(p.getBoundingClientRect().height); };
-  const vh = meas('100vh'), svh = meas('100svh'), dvh = meas('100dvh'), lvh = meas('100lvh');
-  const sab = meas('env(safe-area-inset-bottom)'), sat = meas('env(safe-area-inset-top)');
-  p.remove();
-  const vv = window.visualViewport;
-  d.textContent =
-    'scr '  + screen.width + 'x' + screen.height + '  avail ' + screen.availHeight + '  dpr ' + (window.devicePixelRatio || 1) + '\n' +
-    'inner ' + window.innerWidth + 'x' + window.innerHeight + '  outer ' + window.outerHeight + '\n' +
-    'vh ' + vh + '  lvh ' + lvh + '  svh ' + svh + '  dvh ' + dvh + '\n' +
-    'vv ' + (vv ? Math.round(vv.height) : '-') + '  vvTop ' + (vv ? Math.round(vv.offsetTop) : '-') + '  scale ' + (vv ? vv.scale.toFixed(2) : '-') + '\n' +
-    'safeT ' + sat + '  safeB ' + sab + '  standalone ' + (navigator.standalone ? 'Y' : 'n') + '\n' +
-    'RED=fixed:0  BLUE=100vh  GREEN=100lvh';
-}
-fillGapRuler();
-window.addEventListener('resize', fillGapRuler);
-if (window.visualViewport) window.visualViewport.addEventListener('resize', fillGapRuler);
 
 /* ---- paged layout styles (present only in paged mode) ---- */
 function applyPagedStyles(){
@@ -1218,7 +1185,10 @@ function scrollPagedTo(x, animate){
   if (flipRAF){ cancelAnimationFrame(flipRAF); flipRAF = null; }
   const target = Math.round(x);
   if (!animate){ ct.scrollLeft = target; return; }
-  const from = ct.scrollLeft, dist = target - from, t0 = performance.now(), dur = 200;
+  // duration scales with the remaining distance: after a finger-drag most of the travel is already
+  // done, so the settle is near-instant; a full-page tap/key turn stays a quick ~180ms slide
+  const from = ct.scrollLeft, dist = target - from, t0 = performance.now();
+  const dur = Math.min(180, Math.max(70, Math.abs(dist) / 3));
   const ease = p => 1 - (1 - p) * (1 - p);   // ease-out quad
   const step = now => {
     const p = Math.min(1, (now - t0) / dur);
@@ -1262,16 +1232,51 @@ function updateProgress(){
 
 /* ---- gestures: swipe / drag / trackpad / keys / edge-taps ---- */
 const sc = $('scroller');
-// Pointer drag covers BOTH a touch swipe (phone) and a mouse/trackpad click-drag (desktop).
-let pX = null, pY = null, pDown = false;
-sc.addEventListener('pointerdown', e => { if (mode !== 'paged' || excerptMode) return; pDown = true; pX = e.clientX; pY = e.clientY; });
-sc.addEventListener('pointerup', e => {
-  if (mode !== 'paged' || !pDown) return;
-  pDown = false;
-  const dx = e.clientX - pX, dy = e.clientY - pY;
-  if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) goToPage(currentPage + (dx < 0 ? 1 : -1));
+// Finger-follow paging (touch swipe on phone, click-drag on desktop): the page tracks the finger
+// 1:1 while dragging, then snaps on release. A new touch instantly grabs a page mid-flight, so
+// rapid flick-flick-flick turns pages as fast as she can flick — nothing waits out an animation.
+let dragging = false, dragX0 = 0, dragY0 = 0, dragSL0 = 0, dragAxis = null, dragVel = 0, dragLastX = 0, dragLastT = 0;
+sc.addEventListener('pointerdown', e => {
+  if (mode !== 'paged' || excerptMode) return;
+  if (flipRAF){ cancelAnimationFrame(flipRAF); flipRAF = null; }   // grab whatever's mid-snap
+  dragging = true; dragAxis = null; dragVel = 0;
+  dragX0 = dragLastX = e.clientX; dragY0 = e.clientY;
+  dragSL0 = $('content').scrollLeft; dragLastT = performance.now();
 });
-sc.addEventListener('pointercancel', () => { pDown = false; });
+sc.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - dragX0, dy = e.clientY - dragY0;
+  if (dragAxis == null){
+    if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;      // ignore jitter until intent is clear
+    dragAxis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
+    if (dragAxis === 'y'){ dragging = false; return; }     // vertical gesture — not a page turn
+  }
+  const now = performance.now(), dt = Math.max(1, now - dragLastT);
+  dragVel = 0.8 * dragVel + 0.2 * ((e.clientX - dragLastX) / dt);   // smoothed finger px/ms
+  dragLastX = e.clientX; dragLastT = now;
+  $('content').scrollLeft = dragSL0 - dx;                  // the page follows the finger
+});
+function endPageDrag(e){
+  if (!dragging) return;
+  dragging = false;
+  const ct = $('content'), dx = e.clientX - dragX0;
+  const raw = ct.scrollLeft / (pageStep || 1);
+  const fling = Math.abs(dragVel) > 0.35;                  // a quick flick commits even if short
+  let target;
+  // A fling advances from the page already committed to (currentPage), so flicking mid-animation
+  // stacks: flick-flick-flick = +3, not three re-commits to the same in-flight page. The raw
+  // scroll term still wins after a long multi-page drag.
+  if (fling) target = dragVel < 0 ? Math.max(currentPage + 1, Math.floor(raw) + 1)
+                                  : Math.min(currentPage - 1, Math.ceil(raw) - 1);
+  else if (Math.abs(dx) > pageStep * 0.15 && Math.abs(dx) < pageStep * 0.5)
+    target = dx < 0 ? Math.ceil(raw) : Math.floor(raw);    // modest drag: commit in its direction
+  else target = Math.round(raw);                           // otherwise settle on the nearest page
+  goToPage(target, true);
+}
+// up/cancel on window so a drag that ends outside the scroller still settles cleanly
+window.addEventListener('pointerup', endPageDrag);
+window.addEventListener('pointercancel', () => { if (dragging){ dragging = false; goToPage(currentPage, true); } });
+sc.addEventListener('dragstart', e => { if (mode === 'paged') e.preventDefault(); });   // no image ghost-drags
 // Trackpad two-finger swipe (and mouse wheel) → one flip per swipe, but rapid swipes still
 // register. A physical swipe fires a burst that only ever DECAYS; a new swipe shows up as a
 // fresh acceleration (delta jumping back up after decaying). So: flip on the first event of a
