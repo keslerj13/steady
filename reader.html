@@ -131,6 +131,7 @@
     padding:8px 16px calc(26px + env(safe-area-inset-bottom)); max-height:82%; overflow:auto;}
   #setPanel .grip{width:38px; height:4px; border-radius:2px; background:var(--line); margin:8px auto 10px;}
   .setRow{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 2px; border-bottom:1px solid var(--line);}
+  .setRow[hidden]{display:none;}   /* author display:flex otherwise beats the UA's [hidden] rule */
   .setRow:last-child{border-bottom:none;}
   .setLbl{font:600 14px Georgia,serif; color:var(--ink); flex:0 0 auto;}
   .setLbl em{font-style:normal; color:var(--ink-dim); font-weight:400; font-size:11px;}
@@ -322,6 +323,11 @@
         <button class="opt" data-cols="2">2</button>
       </div>
     </div>
+    <div class="setRow"><span class="setLbl">Rotation lock <em>(Android)</em> <em id="rotNote"></em></span>
+      <div class="opts">
+        <button class="opt" id="rotLockBtn">🤖🔒</button>
+      </div>
+    </div>
     <div class="setRow" id="pdfModeRow" hidden><span class="setLbl">PDF view</span>
       <div class="opts">
         <button class="opt" data-pdfmode="reflow">Reflow text</button>
@@ -366,7 +372,7 @@
 <!-- zoom overlay -->
 <div id="zoom" class="hidden"><img alt="Zoomed image"></div>
 
-<div class="prototype-tag">Steady Reader · v28</div>
+<div class="prototype-tag">Steady Reader · v30</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -1156,9 +1162,12 @@ function applyMode(restoreChapter){
   updateProgress();
 }
 function setMode(m){
-  const i = currentChapterIndex();
+  // capture the precise spot (chapter + fraction within it) BEFORE the layout changes,
+  // then restore it after — keeping only the chapter index snapped her back to its first page
+  const pos = currentPosition();
   mode = m; saveSettings({ mode: m });   // remember her choice across sessions
-  applyMode(i);
+  applyMode(pos.chapter);
+  restorePosition(pos);
 }
 function toggleMode(){ setMode(mode === 'paged' ? 'scroll' : 'paged'); }
 
@@ -1314,9 +1323,7 @@ document.addEventListener('keydown', e => {
 // relayout on resize / orientation
 let rzT = null;
 window.addEventListener('resize', () => { clearTimeout(rzT); rzT = setTimeout(() => {
-  const i = currentChapterIndex();
-  measureCanonical();        // viewport size changes the page breaks → recompute the page model
-  applyMode(i);
+  relayoutKeepingPlace();    // viewport size changes the page breaks → recompute, keeping her spot
 }, 150); });
 
 /* ---- TOC ---- */
@@ -1353,9 +1360,10 @@ function setFont(px){
 function relayoutKeepingPlace(){
   if (isImageMode()) return;   // page images don't reflow with text settings
   if (!chapterAnchors.length) return;
-  const i = currentChapterIndex();
+  const pos = currentPosition();   // chapter + fraction, captured against the OLD page model
   measureCanonical();
-  applyMode(i);
+  applyMode(pos.chapter);
+  restorePosition(pos);
 }
 function applyTheme(t){ theme = t; document.documentElement.dataset.theme = t; saveSettings({ theme: t }); updateSettingsUI(); }
 function applyFont(k){
@@ -1372,6 +1380,30 @@ function applyCols(n){
   colsPerPage = n === 2 ? 2 : 1;
   saveSettings({ cols: colsPerPage }); relayoutKeepingPlace(); updateSettingsUI();
 }
+
+/* ---- rotation lock (for reading lying down) ---- */
+// Android (installed app) honours screen.orientation.lock. iOS refuses to let ANY web app lock
+// rotation — there we say so and point at Control Center instead of pretending it worked.
+const IS_IOS_R = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+let rotLock = readerSettings.rotLock === true;
+async function applyRotLock(){
+  const note = $('rotNote');
+  if (rotLock){
+    try {
+      await screen.orientation.lock('portrait-primary');
+      if (note) note.textContent = '';
+    } catch(e){
+      if (note) note.textContent = IS_IOS_R
+        ? '(iPhone: use Control Center’s lock)'
+        : '(works in the installed app)';
+    }
+  } else {
+    try { screen.orientation.unlock(); } catch(e){}
+    if (note) note.textContent = '';
+  }
+  updateSettingsUI();
+}
+function setRotLock(v){ rotLock = v; saveSettings({ rotLock: v }); applyRotLock(); }
 function buildFontOptions(){
   const box = $('fontOpts'); box.innerHTML = '';
   Object.entries(FONTS).forEach(([k, f]) => {
@@ -1390,6 +1422,7 @@ function updateSettingsUI(){
   const isPdf = !!(book && book.isPdf), row = $('pdfModeRow');
   if (row) row.hidden = !isPdf;
   document.querySelectorAll('[data-pdfmode]').forEach(b => b.classList.toggle('sel', isPdf && b.dataset.pdfmode === book.pdfMode));
+  const rb = $('rotLockBtn'); if (rb) rb.classList.toggle('sel', rotLock);
 }
 // Switch a PDF between reflowed text and original page images. The choice is saved on the record,
 // then the book is reopened in the new mode (landing near the same spot via the saved position).
@@ -1652,6 +1685,13 @@ document.querySelectorAll('.swatch').forEach(s => s.onclick = () => applyTheme(s
 document.querySelectorAll('[data-lh]').forEach(b => b.onclick = () => applyLineH(parseFloat(b.dataset.lh)));
 document.querySelectorAll('[data-cols]').forEach(b => b.onclick = () => applyCols(parseInt(b.dataset.cols)));
 document.querySelectorAll('[data-pdfmode]').forEach(b => b.onclick = () => switchPdfMode(b.dataset.pdfmode));
+$('rotLockBtn').onclick = () => setRotLock(!rotLock);
+// re-assert her saved lock on every launch (a page's lock doesn't persist across app restarts);
+// retry once on first touch in case the engine wants a user gesture before allowing it
+if (rotLock){
+  applyRotLock();
+  document.addEventListener('pointerdown', () => { if (rotLock) applyRotLock(); }, { once: true });
+}
 $('fsMinus').onclick = () => setFont(fontPx - 1);
 $('fsPlus').onclick = () => setFont(fontPx + 1);
 $('btnSettings').onclick = () => { updateSettingsUI(); $('setWrap').classList.remove('hidden'); };
