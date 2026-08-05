@@ -113,6 +113,21 @@
   #reader.excerpting .tapzone{ pointer-events:none; }
   .iconbtn.active{ background:var(--accent); border-color:var(--accent); color:#06231f; }
 
+  /* ---------- in-book search ---------- */
+  #searchWrap{position:fixed; inset:0; z-index:17; background:var(--paper); display:flex; justify-content:center;}
+  #searchPanel{width:100%; max-width:640px; height:100%; display:flex; flex-direction:column;
+    padding:calc(10px + env(safe-area-inset-top)) 14px 0;}
+  #searchBar{display:flex; gap:8px; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--line);}
+  #searchInput{flex:1 1 auto; min-width:0; font:16px/1.4 inherit; padding:10px 12px; border:1px solid var(--line);
+    border-radius:10px; background:var(--chrome); color:var(--ink); -webkit-appearance:none;}
+  #searchCount{color:var(--ink-dim); font-size:12px; padding:8px 2px 2px;}
+  #searchResults{flex:1 1 auto; overflow-y:auto; -webkit-overflow-scrolling:touch;
+    padding:4px 0 calc(24px + env(safe-area-inset-bottom));}
+  .srItem{padding:11px 4px; border-bottom:1px solid var(--line); font-size:14px; line-height:1.45; cursor:pointer;}
+  .srItem:active{background:var(--chrome);}
+  .srPage{color:var(--ink-dim); font-size:12px; margin-top:3px;}
+  .srItem mark, #content mark.srFlash{background:var(--accent); color:inherit; border-radius:2px; padding:0 1px;}
+
   /* ---------- TOC drawer ---------- */
   #tocWrap{position:fixed; inset:0; z-index:15; background:rgba(20,16,10,.42); display:flex;}
   #tocPanel{width:84%; max-width:340px; height:100%; overflow:auto; background:var(--paper);
@@ -268,6 +283,7 @@
     <button class="iconbtn" id="btnHome" aria-label="Back to library">‹</button>
     <button class="iconbtn" id="btnToc" aria-label="Table of contents">☰</button>
     <div id="bookTitle"></div>
+    <button class="iconbtn" id="btnSearch" aria-label="Search this book">🔍</button>
     <button class="iconbtn" id="btnSettings" aria-label="Display settings">Aa</button>
   </div>
   <div id="scroller">
@@ -279,6 +295,18 @@
     <button class="iconbtn" id="modeBtn">Pages ▦</button>
     <div id="progress"></div>
     <button class="iconbtn" id="btnExcerpt" aria-label="Excerpt mode">❝</button>
+  </div>
+</div>
+
+<!-- in-book search -->
+<div id="searchWrap" class="hidden">
+  <div id="searchPanel">
+    <div id="searchBar">
+      <input id="searchInput" type="search" placeholder="Search this book…" autocomplete="off" autocapitalize="off">
+      <button class="iconbtn" id="searchClose" aria-label="Close search">✕</button>
+    </div>
+    <div id="searchCount"></div>
+    <div id="searchResults"></div>
   </div>
 </div>
 
@@ -372,7 +400,7 @@
 <!-- zoom overlay -->
 <div id="zoom" class="hidden"><img alt="Zoomed image"></div>
 
-<div class="prototype-tag">Steady Reader · v30</div>
+<div class="prototype-tag">Steady Reader · v31</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -1144,10 +1172,12 @@ function applyMode(restoreChapter){
     mode = 'scroll';
     sc.classList.remove('paged'); ct.classList.remove('paged'); clearPagedStyles();
     $('modeBtn').classList.add('hidden'); $('btnExcerpt').classList.add('hidden');
+    $('btnSearch').classList.add('hidden');   // page images have no text to search
     updateProgress();
     return;
   }
   $('modeBtn').classList.remove('hidden'); $('btnExcerpt').classList.remove('hidden');
+  $('btnSearch').classList.remove('hidden');
   if (mode === 'paged'){
     sc.classList.add('paged'); ct.classList.add('paged');
     pageStep = applyPagedStyles();
@@ -1325,6 +1355,82 @@ let rzT = null;
 window.addEventListener('resize', () => { clearTimeout(rzT); rzT = setTimeout(() => {
   relayoutKeepingPlace();    // viewport size changes the page breaks → recompute, keeping her spot
 }, 150); });
+
+/* ---- in-book search ---- */
+// Search the rendered flow directly (the whole book is one DOM), label each match with its
+// canonical page via the shared page model, and jump using the SAME geometry the match was
+// measured in — so the jump is exact in either mode.
+function searchPositionOf(range){
+  const sc = $('scroller'), ct = $('content');
+  const rect = range.getBoundingClientRect(), scRect = sc.getBoundingClientRect();
+  let chapter = 0, pos = { };
+  if (mode === 'paged'){
+    const absX = rect.left - scRect.left + ct.scrollLeft;
+    const pageF = Math.max(0, absX / (pageStep || 1));
+    for (let i = 0; i < canon.chapStartPage.length; i++){ if (canon.chapStartPage[i] <= pageF) chapter = i; else break; }
+    pos = { pageF, page: Math.min(canon.total, Math.floor(pageF) + 1) };
+  } else {
+    const y = rect.top - scRect.top + sc.scrollTop;
+    for (let i = 0; i < canon.chapTop.length; i++){ if (canon.chapTop[i] <= y + 4) chapter = i; else break; }
+    const t0 = canon.chapTop[chapter] || 0, t1 = (chapter + 1 < canon.chapTop.length) ? canon.chapTop[chapter + 1] : canon.contentHeight;
+    const frac = t1 > t0 ? Math.max(0, Math.min(1, (y - t0) / (t1 - t0))) : 0;
+    const p0 = canon.chapStartPage[chapter] || 0, p1 = (chapter + 1 < canon.chapStartPage.length) ? canon.chapStartPage[chapter + 1] : canon.total;
+    pos = { y, page: Math.max(1, Math.min(canon.total, Math.round(p0 + frac * (p1 - p0)) + 1)) };
+  }
+  return pos;
+}
+let searchT = null, searchMatches = [];
+function runBookSearch(q){
+  const res = $('searchResults'), cnt = $('searchCount');
+  res.innerHTML = ''; searchMatches = [];
+  q = (q || '').trim();
+  if (q.length < 2){ cnt.textContent = q ? 'Keep typing…' : ''; return; }
+  const needle = q.toLowerCase(), LIMIT = 200;
+  const walker = document.createTreeWalker($('content'), NodeFilter.SHOW_TEXT);
+  let node, total = 0;
+  while ((node = walker.nextNode()) && total < LIMIT){
+    const text = node.nodeValue, lower = text.toLowerCase();
+    let at = lower.indexOf(needle);
+    while (at !== -1 && total < LIMIT){
+      const range = document.createRange();
+      range.setStart(node, at); range.setEnd(node, at + q.length);
+      const pos = searchPositionOf(range);
+      searchMatches.push({ node, at, len: q.length, pos });
+      const item = document.createElement('div'); item.className = 'srItem';
+      const snip = document.createElement('div');
+      const s0 = Math.max(0, at - 40), s1 = Math.min(text.length, at + q.length + 70);
+      snip.append((s0 > 0 ? '…' : '') + text.slice(s0, at));
+      const m = document.createElement('mark'); m.textContent = text.slice(at, at + q.length); snip.appendChild(m);
+      snip.append(text.slice(at + q.length, s1) + (s1 < text.length ? '…' : ''));
+      const pg = document.createElement('div'); pg.className = 'srPage'; pg.textContent = 'Page ' + pos.page;
+      item.append(snip, pg);
+      const idx = searchMatches.length - 1;
+      item.onclick = () => jumpToMatch(idx);
+      res.appendChild(item);
+      total++;
+      at = lower.indexOf(needle, at + 1);
+    }
+  }
+  cnt.textContent = total ? (total >= LIMIT ? 'First ' + LIMIT + ' matches' : total + (total === 1 ? ' match' : ' matches')) : 'No matches';
+}
+function jumpToMatch(idx){
+  const m = searchMatches[idx]; if (!m) return;
+  $('searchWrap').classList.add('hidden');
+  if (mode === 'paged') goToPage(Math.floor(m.pos.pageF), false);
+  else { $('scroller').scrollTop = Math.max(0, m.pos.y - 90); updateProgress(); }
+  // flash the exact match, then unwrap so the DOM (and page model) is untouched afterwards
+  try {
+    const range = document.createRange();
+    range.setStart(m.node, m.at); range.setEnd(m.node, m.at + m.len);
+    const mark = document.createElement('mark'); mark.className = 'srFlash';
+    range.surroundContents(mark);
+    setTimeout(() => {
+      const p = mark.parentNode; if (!p) return;
+      while (mark.firstChild) p.insertBefore(mark.firstChild, mark);
+      p.removeChild(mark); p.normalize();
+    }, 1800);
+  } catch(e){}
+}
 
 /* ---- TOC ---- */
 function buildToc(){
@@ -1673,6 +1779,15 @@ $('bmCancel').onclick = () => $('bookMenu').classList.add('hidden');
 $('bookMenu').onclick = e => { if (e.target.id === 'bookMenu') $('bookMenu').classList.add('hidden'); };
 $('modeBtn').onclick = toggleMode;
 $('btnToc').onclick = () => { buildToc(); $('tocWrap').classList.remove('hidden'); };
+$('btnSearch').onclick = () => {
+  $('searchWrap').classList.remove('hidden');
+  const inp = $('searchInput');
+  inp.focus(); inp.select();
+  runBookSearch(inp.value);
+};
+$('searchClose').onclick = () => $('searchWrap').classList.add('hidden');
+$('searchInput').addEventListener('input', () => { clearTimeout(searchT); searchT = setTimeout(() => runBookSearch($('searchInput').value), 250); });
+$('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });   // dismiss the keyboard, results are live
 $('tocWrap').onclick = e => { if (e.target.id === 'tocWrap') $('tocWrap').classList.add('hidden'); };
 $('content').addEventListener('click', e => {
   if (e.target.tagName === 'IMG'){ $('zoom').querySelector('img').src = e.target.src; $('zoom').classList.remove('hidden'); }
