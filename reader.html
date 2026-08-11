@@ -400,7 +400,7 @@
 <!-- zoom overlay -->
 <div id="zoom" class="hidden"><img alt="Zoomed image"></div>
 
-<div class="prototype-tag">Steady Reader · v31</div>
+<div class="prototype-tag">Steady Reader · v32</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -430,8 +430,103 @@ let colsPerPage = readerSettings.cols === 2 ? 2 : 1;
    browser's built-in DecompressionStream('deflate-raw').
    ============================================================ */
 async function inflateRaw(bytes){
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  // native fast path; fall back to the pure-JS inflater on browsers that lack
+  // DecompressionStream entirely (older Android/Firefox) or lack 'deflate-raw'
+  if (typeof DecompressionStream !== 'undefined'){
+    try {
+      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    } catch(e){ /* fall through to JS */ }
+  }
+  return inflateRawJS(bytes);
+}
+// Pure-JS RFC 1951 (raw deflate) inflater. Spec-faithful and small; only ever
+// runs on browsers whose native API is missing, so speed matters less than working.
+function inflateRawJS(src){
+  let sp = 0, bb = 0, bc = 0;                       // source pos, bit buffer, bit count
+  let out = new Uint8Array(1 << 16), op = 0;
+  const ensure = n => { if (op + n > out.length){ let ns = out.length; while (op + n > ns) ns <<= 1; const t = new Uint8Array(ns); t.set(out); out = t; } };
+  const bits = n => {
+    while (bc < n){ if (sp >= src.length) throw new Error('Unexpected end of compressed data.'); bb |= src[sp++] << bc; bc += 8; }
+    const v = bb & ((1 << n) - 1); bb >>>= n; bc -= n; return v;
+  };
+  function build(lens){                             // canonical Huffman: counts per length + ordered symbols
+    const count = new Array(16).fill(0);
+    for (const l of lens) count[l]++;
+    count[0] = 0;
+    const offs = new Array(16).fill(0);
+    for (let i = 1; i < 15; i++) offs[i + 1] = offs[i] + count[i];
+    const syms = new Array(lens.length).fill(0);
+    for (let s = 0; s < lens.length; s++) if (lens[s]) syms[offs[lens[s]]++] = s;
+    return { count, syms };
+  }
+  function decode(t){
+    let code = 0, first = 0, index = 0;
+    for (let len = 1; len <= 15; len++){
+      code |= bits(1);
+      const c = t.count[len];
+      if (code - first < c) return t.syms[index + (code - first)];
+      index += c; first = (first + c) << 1; code <<= 1;
+    }
+    throw new Error('Bad Huffman code in EPUB data.');
+  }
+  const LBASE = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+  const LEXT  = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+  const DBASE = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
+  const DEXT  = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+  let fixedLit = null, fixedDist = null;
+  function fixedTrees(){
+    if (!fixedLit){
+      const ll = new Array(288);
+      for (let i = 0; i < 288; i++) ll[i] = i < 144 ? 8 : i < 256 ? 9 : i < 280 ? 7 : 8;
+      fixedLit = build(ll);
+      fixedDist = build(new Array(30).fill(5));
+    }
+  }
+  const ORDER = [16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];
+  let final = 0;
+  do {
+    final = bits(1);
+    const type = bits(2);
+    if (type === 0){                                // stored: realign to byte, copy verbatim
+      bb = 0; bc = 0;
+      const len = src[sp] | (src[sp + 1] << 8); sp += 4;   // skip LEN + NLEN
+      ensure(len); out.set(src.subarray(sp, sp + len), op); op += len; sp += len;
+      continue;
+    }
+    let lt, dt;
+    if (type === 1){ fixedTrees(); lt = fixedLit; dt = fixedDist; }
+    else if (type === 2){                           // dynamic: read the code-length code, then both trees
+      const hlit = bits(5) + 257, hdist = bits(5) + 1, hclen = bits(4) + 4;
+      const clens = new Array(19).fill(0);
+      for (let i = 0; i < hclen; i++) clens[ORDER[i]] = bits(3);
+      const ct = build(clens);
+      const lens = new Array(hlit + hdist).fill(0);
+      for (let i = 0; i < hlit + hdist; ){
+        const s = decode(ct);
+        if (s < 16) lens[i++] = s;
+        else if (s === 16){ const prev = lens[i - 1]; let r = 3 + bits(2); while (r--) lens[i++] = prev; }
+        else if (s === 17){ let r = 3 + bits(3); while (r--) lens[i++] = 0; }
+        else { let r = 11 + bits(7); while (r--) lens[i++] = 0; }
+      }
+      lt = build(lens.slice(0, hlit)); dt = build(lens.slice(hlit));
+    } else throw new Error('Bad block type in EPUB data.');
+    for (;;){
+      const sym = decode(lt);
+      if (sym === 256) break;
+      if (sym < 256){ ensure(1); out[op++] = sym; }
+      else {
+        const li = sym - 257;
+        const len = LBASE[li] + bits(LEXT[li]);
+        const ds = decode(dt);
+        const dist = DBASE[ds] + bits(DEXT[ds]);
+        if (dist > op) throw new Error('Bad back-reference in EPUB data.');
+        ensure(len);
+        for (let k = 0; k < len; k++){ out[op] = out[op - dist]; op++; }
+      }
+    }
+  } while (!final);
+  return out.subarray(0, op);
 }
 function readZip(buf){
   const dv = new DataView(buf), u8 = new Uint8Array(buf);
