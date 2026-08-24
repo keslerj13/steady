@@ -257,9 +257,10 @@
       <label class="btn primary" for="epubFile">＋ Add book</label>
       <button id="menuBtn" class="menu-btn" aria-label="Menu">☰</button>
     </div>
-    <!-- octet-stream included because Android delivers .epub files from messengers/email with no
-         registered MIME type, and its picker filters on MIME — without it the file is unselectable -->
-    <input id="epubFile" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf,application/octet-stream" hidden>
+    <!-- NO accept filter: .epub has no reliably-registered MIME type anywhere (Android delivers
+         them untyped, other pickers grey them out), so filtering here kept blocking legitimate
+         books on multiple devices. The app validates the chosen file itself and explains nicely. -->
+    <input id="epubFile" type="file" hidden>
   </div>
   <div id="libHint" class="hidden">Add an EPUB or PDF to begin. Tap a cover to read; tap <b>⋯</b> to move it between shelves.</div>
   <div class="shelf" data-shelf="reading"><h2>Reading</h2><div class="shelfBooks"></div></div>
@@ -402,7 +403,7 @@
 <!-- zoom overlay -->
 <div id="zoom" class="hidden"><img alt="Zoomed image"></div>
 
-<div class="prototype-tag">Steady Reader · v33</div>
+<div class="prototype-tag">Steady Reader · v34</div>
 
 <script>
 const $ = id => document.getElementById(id);
