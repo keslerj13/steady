@@ -403,7 +403,7 @@
 <!-- zoom overlay -->
 <div id="zoom" class="hidden"><img alt="Zoomed image"></div>
 
-<div class="prototype-tag">Steady Reader · v34</div>
+<div class="prototype-tag">Steady Reader · v35</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -1127,6 +1127,12 @@ async function renderBook(){
     const doc = new DOMParser().parseFromString(await book.zip.text(href), 'text/html');
     const body = doc.body || doc.documentElement;
     body.querySelectorAll('script, style, link').forEach(el => el.remove());   // our clean typography, not the publisher's
+    // Books ship their own element ids — The Vegetarian literally has <div id="cover"> — which
+    // collide with the app's UI ids, so app CSS styles book content as chrome (that one became a
+    // fixed full-screen overlay hiding the whole book). Prefix every content id out of our
+    // namespace; internal #fragment links are rewritten to keep pointing at their targets.
+    body.querySelectorAll('[id]').forEach(el => el.setAttribute('id', 'bk-' + el.getAttribute('id')));
+    body.querySelectorAll('a[href^="#"]').forEach(a => a.setAttribute('href', '#bk-' + a.getAttribute('href').slice(1)));
     const chapDir = dirOf(href);
     for (const el of body.querySelectorAll('img')){
       const r = el.getAttribute('src'); const b = r && await book.zip.bytes(resolvePath(chapDir, r));
