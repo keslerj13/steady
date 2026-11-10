@@ -1019,6 +1019,7 @@ async function openBookById(id){
 }
 async function openBookByIdInner(id){
   const rec = await dbGet(id); if (!rec) return;
+  posReady = false; clearTimeout(posSaveT); posSaveT = null;
   currentBookId = id; currentRec = rec;
   const b = await blobsGet(id);
   const fileBuf = b && b.file;
@@ -1044,6 +1045,7 @@ function openBookMenu(rec){
 async function backToLibrary(){
   await flushReadTime();
   await saveCurrentPosition();
+  posReady = false; clearTimeout(posSaveT); posSaveT = null;
   if (excerptMode) setExcerptMode(false);
   $('reader').classList.add('hidden'); $('cover').classList.add('hidden');
   $('library').classList.remove('hidden');
@@ -1069,6 +1071,22 @@ function currentPosition(){
   return { pmode: 'text', chapter: i, frac: Math.max(0, Math.min(1, frac)),
     overall: total ? canonicalPageIndex() / total : 0, page: canonicalPageIndex() + 1, pages: total };
 }
+// Save her place as she reads (not just on "back to library") — closing the app from the
+// recents screen never runs backToLibrary, and Android may kill it without 'pagehide'.
+// posReady stays false while a book is opening, so the initial render at page 1 (before her
+// saved spot is restored) can't overwrite the real position.
+let posReady = false, posSaveT = null;
+function schedulePositionSave(){
+  if (!posReady || !currentBookId || posSaveT) return;
+  posSaveT = setTimeout(() => { posSaveT = null; saveCurrentPosition(); }, 1500);
+}
+function flushPosition(){
+  clearTimeout(posSaveT); posSaveT = null;
+  if (posReady && currentBookId && !$('reader').classList.contains('hidden')) saveCurrentPosition();
+}
+window.addEventListener('pagehide', flushPosition);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushPosition(); });
+document.addEventListener('freeze', flushPosition);
 async function saveCurrentPosition(){
   if (!currentBookId) return;
   try { const rec = await dbGet(currentBookId); if (rec){ rec.pos = currentPosition(); await dbPut(rec); } } catch(e){}
@@ -1215,7 +1233,8 @@ function openReader(){
   $('library').classList.add('hidden');
   $('cover').classList.add('hidden');
   $('reader').classList.remove('hidden');
-  renderBook().then(() => { measureCanonical(); applyMode(0); if (currentRec && currentRec.pos) restorePosition(currentRec.pos); });
+  posReady = false;
+  renderBook().then(() => { measureCanonical(); applyMode(0); if (currentRec && currentRec.pos) restorePosition(currentRec.pos); posReady = true; });
 }
 
 /* ---- paged layout styles (present only in paged mode) ---- */
@@ -1365,6 +1384,7 @@ function canonicalPageIndex(){          // 0-based canonical page the reader is 
   return Math.max(0, Math.min(canon.total - 1, Math.round(p0 + frac * (p1 - p0))));
 }
 function updateProgress(){
+  schedulePositionSave();
   if (isImageMode()){ $('progress').textContent = 'Page ' + (currentImagePage() + 1) + ' of ' + (book.numPages || 1); return; }
   const cp = canonicalPageIndex();
   let next = canon.total;

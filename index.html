@@ -345,7 +345,7 @@ const setP = (el, pct) => el.style.setProperty('--p', Math.max(0, Math.min(100, 
 const LS = 'steady.state.v2';
 // Bump this on every deploy (keep it in sync with CACHE in sw.js) so the version shown
 // at the bottom of the page reflects what's actually live.
-const APP_VERSION = 'v35';
+const APP_VERSION = 'v36';
 const defaults = { noiseType:'brown', noiseVol:35, bookVol:100, speed:1, activeId:null };
 let S = Object.assign({}, defaults, JSON.parse(localStorage.getItem(LS) || '{}'));
 let saveTimer = null;
@@ -691,12 +691,26 @@ async function openBook(id){
 
 // Write the active book's meta (index + time) to disk, throttled. Does NOT read
 // the audio element — callers set active.index/active.time themselves.
+// This is a THROTTLE, not a debounce: a pending write is never pushed back. (It used to
+// clearTimeout on every call, and timeupdate calls it every ~250ms — so while the book was
+// playing the write never actually happened. Close the app mid-listen and the saved place
+// was wherever she last paused. Android often kills a closed app without 'pagehide'.)
 let progTimer = null;
 function persistBook(){
   if (!active) return;
   updateLibraryRow(active);
-  clearTimeout(progTimer);
-  progTimer = setTimeout(() => idbPut('meta', active.id, active), 900);
+  if (progTimer) return;                      // a write is already scheduled; it'll pick up the latest
+  progTimer = setTimeout(() => { progTimer = null; if (active) idbPut('meta', active.id, active).catch(()=>{}); }, 1000);
+}
+// Write the current place (and settings) right now — used whenever the app might be leaving.
+function flushProgress(){
+  if (active){
+    if (tracks.length && audio.src && !cueing) active.time = audio.currentTime || 0;
+    clearTimeout(progTimer); progTimer = null;
+    idbPut('meta', active.id, active).catch(()=>{});
+  }
+  clearTimeout(saveTimer);
+  try { localStorage.setItem(LS, JSON.stringify(S)); } catch(e){}
 }
 // Capture the live playback position (called from timeupdate while playing).
 function saveProgress(){
@@ -904,8 +918,13 @@ function cueTrack(i, time, autoplay){
 }
 
 // Re-assert the chosen speed — iOS Safari resets playbackRate to 1 on play/load.
+// defaultPlaybackRate matters most: loading a new src resets playbackRate TO the default,
+// so if the default is 1× every new chapter starts at 1× and then gets yanked to her speed a
+// moment later — and that mid-stream rate change is what silenced the first seconds of each
+// chapter (a few words, then a gap while the clock kept running). With the default set, each
+// chapter starts at the right speed and the later re-asserts are no-ops.
 function applyRate(){
-  try { audio.playbackRate = S.speed; audio.preservesPitch = true; } catch(e){}
+  try { audio.defaultPlaybackRate = S.speed; audio.playbackRate = S.speed; audio.preservesPitch = true; } catch(e){}
 }
 
 async function play(){
@@ -972,9 +991,13 @@ document.addEventListener('visibilitychange', () => {
 audio.addEventListener('pause', () => {
   isPlaying = false; setPlayIcon(false); updateSession('paused');
   flushStats();   // bank the listening time from this session promptly
+  flushProgress(); // and save her exact place the moment the book stops
   // If something OUTSIDE the app paused the book (another app grabbing audio focus),
   // stop the noise too — unless we're mid track-swap, where the noise covers the gap.
-  if (!cueing) stopNoise();
+  // A chapter reaching its natural end also fires 'pause' (just BEFORE 'ended'); keep the
+  // noise running through that so the speaker never hears silence at the chapter boundary.
+  // (On the book's last chapter, nextTrack() calls pause() which stops the noise itself.)
+  if (!cueing && !audio.ended) stopNoise();
 });
 audio.addEventListener('ended', () => nextTrack());
 audio.addEventListener('timeupdate', () => {
@@ -1397,7 +1420,7 @@ function paintSpeed(){
 speedRange.addEventListener('input', () => {
   const v = SPEEDS[+speedRange.value];
   S.speed = v; persist();
-  audio.playbackRate = v;
+  applyRate();
   $('speedVal').textContent = v + '×';
   setP(speedRange, +speedRange.value / 8 * 100);
 });
@@ -1556,7 +1579,7 @@ function initUI(){
   bookVol.value = S.bookVol; $('bookVolVal').textContent = S.bookVol+'%'; setP(bookVol, S.bookVol);
   audio.volume = S.bookVol/100;   // ignored on iOS (see bookVolNote), honored elsewhere
   audio.preservesPitch = true;   // keep voices natural when sped up
-  audio.playbackRate = S.speed;
+  applyRate();
   // iOS can't set a media element's volume, so a book-volume slider there is a dead control —
   // hide it and explain. (The noise level still works because we bake it into the file.)
   if (IS_IOS){ $('bookVolRow').hidden = true; $('bookVolNote').hidden = false; }
@@ -1576,10 +1599,11 @@ if (navigator.storage && navigator.storage.persist) navigator.storage.persist().
   cleanOrphanTracks();  // reclaim space from any half-finished imports
 })();
 
-// flush the active book's position when leaving
-window.addEventListener('pagehide', () => {
-  if (active){ active.time = audio.currentTime; idbPut('meta', active.id, active); }
-});
+// flush the active book's position when leaving. On Android, swiping the app away often
+// never fires 'pagehide' — 'visibilitychange' to hidden is the last event we reliably get.
+window.addEventListener('pagehide', flushProgress);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushProgress(); });
+document.addEventListener('freeze', flushProgress);
 
 // register the service worker so the app loads offline (no-op when unsupported / file://)
 if ('serviceWorker' in navigator) {
